@@ -1,0 +1,13 @@
+# Local attachments are not part of the source repository.
+.codex-attachments/
+
+# Local credentials and environment files.
+.env
+.env.*
+!.env.example
+
+# Go build and profiling output.
+/m3tal-ai
+*.out
+*.prof
+coverage.txt
