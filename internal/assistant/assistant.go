@@ -220,13 +220,48 @@ func (assistant *Assistant) proposePlan(query string) (toolPlan, error) {
 	return parsePlanJSON(generated)
 }
 
-func parsePlanJSON(generated string) (toolPlan, error) {
-	start := strings.Index(generated, "{")
-	end := strings.LastIndex(generated, "}")
-	if start < 0 || end <= start {
-		return toolPlan{}, fmt.Errorf("model did not return a JSON plan")
+func extractFirstJSONObject(s string) (string, error) {
+	start := strings.Index(s, "{")
+	if start < 0 {
+		return "", fmt.Errorf("model did not return a JSON plan")
 	}
-	decoder := json.NewDecoder(strings.NewReader(generated[start : end+1]))
+	depth := 0
+	inString := false
+	escaped := false
+	for i := start; i < len(s); i++ {
+		c := s[i]
+		if escaped {
+			escaped = false
+			continue
+		}
+		if c == '\\' && inString {
+			escaped = true
+			continue
+		}
+		if c == '"' {
+			inString = !inString
+			continue
+		}
+		if !inString {
+			if c == '{' {
+				depth++
+			} else if c == '}' {
+				depth--
+				if depth == 0 {
+					return s[start : i+1], nil
+				}
+			}
+		}
+	}
+	return "", fmt.Errorf("model did not return a complete JSON plan")
+}
+
+func parsePlanJSON(generated string) (toolPlan, error) {
+	rawJSON, err := extractFirstJSONObject(generated)
+	if err != nil {
+		return toolPlan{}, err
+	}
+	decoder := json.NewDecoder(strings.NewReader(rawJSON))
 	decoder.DisallowUnknownFields()
 	var plan toolPlan
 	if err := decoder.Decode(&plan); err != nil {
