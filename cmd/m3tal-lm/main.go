@@ -27,6 +27,9 @@ func run(args []string) error {
 		corpusArg := flags.String("corpus", "", "text file or path-list of directories containing training text")
 		evalArg := flags.String("eval-corpus", "", "optional separate held-out text path-list")
 		checkpoint := flags.String("checkpoint", "models/m3tal-small.json", "output checkpoint path")
+		baseModel := flags.String("base-model", "", "path to existing checkpoint to fine-tune")
+		pretrainCorpus := flags.String("pretrain-corpus", "", "optional corpus path to pre-train on before instruction tuning")
+		pretrainEpochs := flags.Int("pretrain-epochs", 5, "pretraining epochs if --pretrain-corpus is provided")
 		includeInstructions := flags.Bool("include-instructions", false, "include curated self-owned instruction examples in training corpus")
 		instructMode := flags.Bool("instruct", false, "train using prompt-loss masking on instruction examples")
 		epochs := flags.Int("epochs", 2, "training epochs")
@@ -41,33 +44,95 @@ func run(args []string) error {
 		if err := flags.Parse(args[1:]); err != nil {
 			return err
 		}
-		if strings.TrimSpace(*corpusArg) == "" {
-			return fmt.Errorf("--corpus is required; only use text you are licensed to train on")
+
+		var model *lm.Model
+		var tokenizer *lm.Tokenizer
+		var texts []string
+
+		if strings.TrimSpace(*baseModel) != "" {
+			var err error
+			model, err = lm.LoadCheckpoint(*baseModel)
+			if err != nil {
+				return fmt.Errorf("load base model: %w", err)
+			}
+			tokenizer = model.Tokenizer
+			if strings.TrimSpace(*corpusArg) != "" {
+				texts, err = lm.LoadCorpus(strings.Split(*corpusArg, string(os.PathListSeparator)))
+				if err != nil {
+					return err
+				}
+			}
+		} else {
+			if strings.TrimSpace(*corpusArg) == "" && strings.TrimSpace(*pretrainCorpus) == "" {
+				return fmt.Errorf("--corpus or --pretrain-corpus is required; only use text you are licensed to train on")
+			}
+			var pretrainTexts []string
+			if strings.TrimSpace(*pretrainCorpus) != "" {
+				var err error
+				pretrainTexts, err = lm.LoadCorpus(strings.Split(*pretrainCorpus, string(os.PathListSeparator)))
+				if err != nil {
+					return fmt.Errorf("load pretrain corpus: %w", err)
+				}
+			}
+			if strings.TrimSpace(*corpusArg) != "" {
+				var err error
+				texts, err = lm.LoadCorpus(strings.Split(*corpusArg, string(os.PathListSeparator)))
+				if err != nil {
+					return err
+				}
+			} else if len(pretrainTexts) > 0 {
+				texts = pretrainTexts
+			}
+
+			tokenizerTexts := append([]string(nil), texts...)
+			if len(pretrainTexts) > 0 {
+				tokenizerTexts = append(tokenizerTexts, pretrainTexts...)
+			}
+			if *includeInstructions || *instructMode {
+				instTexts := lm.FormatInstructionCorpus(lm.DefaultInstructionSet())
+				for rep := 0; rep < 5; rep++ {
+					tokenizerTexts = append(tokenizerTexts, instTexts...)
+				}
+			}
+			var err error
+			tokenizer, err = lm.TrainTokenizer(tokenizerTexts, *vocab)
+			if err != nil {
+				return err
+			}
+			model, err = lm.NewModel(lm.Config{
+				Context: *contextLength,
+				Width:   *width,
+				Layers:  *layers,
+				Heads:   *heads,
+			}, tokenizer, *seed)
+			if err != nil {
+				return err
+			}
+
+			if len(pretrainTexts) > 0 && *pretrainEpochs > 0 {
+				fmt.Printf("pre-training on %d corpus documents (%d epochs, %d steps/epoch)...\n", len(pretrainTexts), *pretrainEpochs, *steps)
+				pretrainLosses, err := model.Train(pretrainTexts, *pretrainEpochs, *steps, *learningRate)
+				if err != nil {
+					return fmt.Errorf("pretraining: %w", err)
+				}
+				for i, loss := range pretrainLosses {
+					fmt.Printf("pretrain epoch %d loss %.4f\n", i+1, loss)
+				}
+			}
 		}
-		texts, err := lm.LoadCorpus(strings.Split(*corpusArg, string(os.PathListSeparator)))
-		if err != nil {
-			return err
-		}
-		if *includeInstructions {
+
+		if *includeInstructions && !*instructMode {
 			texts = append(texts, lm.FormatInstructionCorpus(lm.DefaultInstructionSet())...)
 		}
-		tokenizer, err := lm.TrainTokenizer(texts, *vocab)
-		if err != nil {
-			return err
-		}
-		model, err := lm.NewModel(lm.Config{
-			Context: *contextLength,
-			Width:   *width,
-			Layers:  *layers,
-			Heads:   *heads,
-		}, tokenizer, *seed)
-		if err != nil {
-			return err
-		}
+
 		var losses []float64
+		var err error
 		if *instructMode {
 			losses, err = model.TrainInstructions(lm.DefaultInstructionSet(), *epochs, *steps, *learningRate)
 		} else {
+			if len(texts) == 0 {
+				return fmt.Errorf("no training texts available; provide --corpus")
+			}
 			losses, err = model.Train(texts, *epochs, *steps, *learningRate)
 		}
 		if err != nil {

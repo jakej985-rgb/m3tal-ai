@@ -78,6 +78,36 @@ func DefaultInstructionSet() []InstructionExample {
 			Prompt:     PlanPrompt("show health and list containers"),
 			Completion: `{"steps":[{"tool":"health"},{"tool":"containers"}]}`,
 		},
+		{
+			Category:   "plan",
+			Prompt:     PlanPrompt("is jellyfin running"),
+			Completion: `{"steps":[{"tool":"containers"}]}`,
+		},
+		{
+			Category:   "plan",
+			Prompt:     PlanPrompt("status of jellyfin"),
+			Completion: `{"steps":[{"tool":"containers"}]}`,
+		},
+		{
+			Category:   "plan",
+			Prompt:     PlanPrompt("check container status"),
+			Completion: `{"steps":[{"tool":"containers"}]}`,
+		},
+		{
+			Category:   "plan",
+			Prompt:     PlanPrompt("what containers are running"),
+			Completion: `{"steps":[{"tool":"containers"}]}`,
+		},
+		{
+			Category:   "plan",
+			Prompt:     PlanPrompt("show containers then stats"),
+			Completion: `{"steps":[{"tool":"containers"},{"tool":"stats"}]}`,
+		},
+		{
+			Category:   "plan",
+			Prompt:     PlanPrompt("check containers and health"),
+			Completion: `{"steps":[{"tool":"containers"},{"tool":"health"}]}`,
+		},
 
 		// Multi-step operations with logs & targets
 		{
@@ -241,6 +271,39 @@ func DefaultInstructionSet() []InstructionExample {
 				},
 			}),
 			Completion: "As explained in [1], the m3tal-docker plugin connects to unix:///var/run/docker.sock to monitor metrics and manage containers via JSON-RPC 2.0.",
+		},
+		{
+			Category: "rag",
+			Prompt: RAGPrompt("what docker version is supported", []RAGNote{
+				{
+					Title:   "Docker",
+					Source:  "/apps/M3tal-core/docs/DOCKER.md",
+					Excerpt: "M3TAL requires Docker Engine 24.0 or newer and Docker Compose V2 for container lifecycle orchestration.",
+				},
+			}),
+			Completion: "According to [1], M3TAL requires Docker Engine 24.0+ and Docker Compose V2.",
+		},
+		{
+			Category: "rag",
+			Prompt: RAGPrompt("what is the container restart policy", []RAGNote{
+				{
+					Title:   "Policies",
+					Source:  "/apps/M3tal-core/docs/DOCKER.md",
+					Excerpt: "Production service definitions in M3TAL specify restart: unless-stopped to survive system reboots.",
+				},
+			}),
+			Completion: "According to [1], production service definitions use restart: unless-stopped to survive reboots.",
+		},
+		{
+			Category: "rag",
+			Prompt: RAGPrompt("how do I inspect running docker containers", []RAGNote{
+				{
+					Title:   "Inspection",
+					Source:  "/apps/M3tal-core/docs/DOCKER.md",
+					Excerpt: "Inspect running containers using docker ps or query the M3TAL Core /api/v2/services endpoint.",
+				},
+			}),
+			Completion: "According to [1], inspect containers using docker ps or the /api/v2/services endpoint.",
 		},
 
 		// Grounded Q&A abstention / negative examples

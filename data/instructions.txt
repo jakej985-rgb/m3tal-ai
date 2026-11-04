@@ -16,6 +16,24 @@ PLAN: {"steps":[{"tool":"containers"},{"tool":"stats"}]}
 Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. User request: show health and list containers
 PLAN: {"steps":[{"tool":"health"},{"tool":"containers"}]}
 
+Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. User request: is jellyfin running
+PLAN: {"steps":[{"tool":"containers"}]}
+
+Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. User request: status of jellyfin
+PLAN: {"steps":[{"tool":"containers"}]}
+
+Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. User request: check container status
+PLAN: {"steps":[{"tool":"containers"}]}
+
+Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. User request: what containers are running
+PLAN: {"steps":[{"tool":"containers"}]}
+
+Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. User request: show containers then stats
+PLAN: {"steps":[{"tool":"containers"},{"tool":"stats"}]}
+
+Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. User request: check containers and health
+PLAN: {"steps":[{"tool":"containers"},{"tool":"health"}]}
+
 Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. User request: restart stack media and show logs
 PLAN: {"steps":[{"tool":"restart_stack","target":"media"},{"tool":"logs","target":"media"}]}
 
@@ -115,6 +133,27 @@ Reference notes:
 The m3tal-docker plugin interacts with unix:///var/run/docker.sock over JSON-RPC 2.0 stdio to collect container metrics and manage lifecycle actions.
 Answer using the reference notes and cite sources with [1], [2], or title. If they do not contain the answer, say so.
 Answer: As explained in [1], the m3tal-docker plugin connects to unix:///var/run/docker.sock to monitor metrics and manage containers via JSON-RPC 2.0.
+
+Question: what docker version is supported
+Reference notes:
+[1] Docker (/apps/M3tal-core/docs/DOCKER.md)
+M3TAL requires Docker Engine 24.0 or newer and Docker Compose V2 for container lifecycle orchestration.
+Answer using the reference notes and cite sources with [1], [2], or title. If they do not contain the answer, say so.
+Answer: According to [1], M3TAL requires Docker Engine 24.0+ and Docker Compose V2.
+
+Question: what is the container restart policy
+Reference notes:
+[1] Policies (/apps/M3tal-core/docs/DOCKER.md)
+Production service definitions in M3TAL specify restart: unless-stopped to survive system reboots.
+Answer using the reference notes and cite sources with [1], [2], or title. If they do not contain the answer, say so.
+Answer: According to [1], production service definitions use restart: unless-stopped to survive reboots.
+
+Question: how do I inspect running docker containers
+Reference notes:
+[1] Inspection (/apps/M3tal-core/docs/DOCKER.md)
+Inspect running containers using docker ps or query the M3TAL Core /api/v2/services endpoint.
+Answer using the reference notes and cite sources with [1], [2], or title. If they do not contain the answer, say so.
+Answer: According to [1], inspect containers using docker ps or the /api/v2/services endpoint.
 
 Question: what is the weather today
 Reference notes:

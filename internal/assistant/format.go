@@ -49,7 +49,17 @@ func writeReadableValue(builder *strings.Builder, value any, indent int) {
 		for _, item := range typed {
 			if object, ok := item.(map[string]any); ok {
 				if name, ok := object["name"]; ok {
-					fmt.Fprintf(builder, "%s- %s\n", pad, compactJSON(name))
+					stateStr := ""
+					if s, ok := object["state"].(string); ok && s != "" {
+						stateStr = s
+					} else if s, ok := object["status"].(string); ok && s != "" {
+						stateStr = s
+					}
+					if stateStr != "" {
+						fmt.Fprintf(builder, "%s- %s (%s)\n", pad, compactJSON(name), stateStr)
+					} else {
+						fmt.Fprintf(builder, "%s- %s\n", pad, compactJSON(name))
+					}
 					continue
 				}
 				if names, ok := object["names"].([]any); ok {
@@ -57,7 +67,18 @@ func writeReadableValue(builder *strings.Builder, value any, indent int) {
 					for _, name := range names {
 						parts = append(parts, strings.TrimPrefix(fmt.Sprint(name), "/"))
 					}
-					fmt.Fprintf(builder, "%s- %s\n", pad, strings.Join(parts, ", "))
+					label := strings.Join(parts, ", ")
+					stateStr := ""
+					if s, ok := object["state"].(string); ok && s != "" {
+						stateStr = s
+					} else if s, ok := object["status"].(string); ok && s != "" {
+						stateStr = s
+					}
+					if stateStr != "" {
+						fmt.Fprintf(builder, "%s- %s (%s)\n", pad, label, stateStr)
+					} else {
+						fmt.Fprintf(builder, "%s- %s\n", pad, label)
+					}
 					continue
 				}
 			}

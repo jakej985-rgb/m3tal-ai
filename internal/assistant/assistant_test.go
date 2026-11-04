@@ -32,6 +32,32 @@ func TestAskUsesCoreForStats(t *testing.T) {
 	}
 }
 
+func TestAskFiltersSpecificContainerStatus(t *testing.T) {
+	core := NewCoreAPI("https://m3tal.test", "")
+	core.Client = &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.Path != "/api/v2/services" {
+			t.Errorf("unexpected API path %q", request.URL.Path)
+		}
+		return mockResponse(request, http.StatusOK, `{"status":"success","data":[{"names":["/jellyfin"],"state":"running"},{"names":["/traefik"],"state":"stopped"}]}`), nil
+	})}
+
+	agent, err := New(nil, core)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	if err := agent.Ask(context.Background(), "is jellyfin running", nil, &output); err != nil {
+		t.Fatal(err)
+	}
+	out := output.String()
+	if !strings.Contains(out, "jellyfin") || !strings.Contains(out, "running") {
+		t.Fatalf("expected jellyfin running in output, got: %s", out)
+	}
+	if strings.Contains(out, "traefik") {
+		t.Fatalf("expected traefik to be filtered out for targeted query, got: %s", out)
+	}
+}
+
 func TestUnknownRequestAsksForClarificationWithoutCallingCore(t *testing.T) {
 	agent, err := New(nil, nil)
 	if err != nil {

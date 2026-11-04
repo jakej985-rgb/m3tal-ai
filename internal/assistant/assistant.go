@@ -7,7 +7,9 @@ import (
 	"io"
 	"net/url"
 	"path/filepath"
+	"regexp"
 	"strings"
+	"unicode"
 
 	"m3tal-ai/internal/lm"
 )
@@ -104,7 +106,7 @@ func (assistant *Assistant) Ask(ctx context.Context, query string, confirm func(
 	case intentHealth:
 		return assistant.printCoreData(ctx, "/api/v2/system/health", "M3TAL health", output)
 	case intentContainers:
-		return assistant.printCoreData(ctx, "/api/v2/services", "M3TAL containers and services", output)
+		return assistant.printCoreContainers(ctx, query, output)
 	case intentLogs:
 		name, err := requireName(query, "for")
 		if err != nil {
@@ -128,6 +130,77 @@ func (assistant *Assistant) Ask(ctx context.Context, query string, confirm func(
 		}
 		return assistant.printKnowledge(query, output)
 	}
+}
+
+func (assistant *Assistant) printCoreContainers(ctx context.Context, query string, output io.Writer) error {
+	data, err := assistant.core.get(ctx, "/api/v2/services")
+	if err != nil {
+		return err
+	}
+	target := extractContainerTarget(query)
+	if target != "" {
+		filtered := filterServicesForContainer(data, target)
+		if len(filtered) > 0 {
+			assistant.lastTarget = &namedTarget{"container", target}
+			fmt.Fprint(output, formatCorePayload("M3TAL container: "+target, filtered, assistant.jsonOutput))
+			return nil
+		}
+	}
+	fmt.Fprint(output, formatCorePayload("M3TAL containers and services", data, assistant.jsonOutput))
+	return nil
+}
+
+func extractContainerTarget(query string) string {
+	stopWords := map[string]bool{
+		"is": true, "are": true, "running": true, "container": true, "containers": true,
+		"docker": true, "service": true, "services": true, "status": true, "check": true,
+		"of": true, "for": true, "the": true, "a": true, "an": true, "what": true,
+		"which": true, "show": true, "list": true, "get": true, "all": true, "me": true,
+		"if": true, "and": true, "or": true, "please": true, "active": true, "stopped": true,
+	}
+	for _, word := range strings.FieldsFunc(strings.ToLower(query), func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsNumber(r) && r != '-' && r != '_'
+	}) {
+		if !stopWords[word] && len(word) > 1 {
+			return word
+		}
+	}
+	return ""
+}
+
+func filterServicesForContainer(data json.RawMessage, target string) json.RawMessage {
+	var entries []map[string]any
+	if err := json.Unmarshal(data, &entries); err != nil {
+		return nil
+	}
+	lowerTarget := strings.ToLower(target)
+	var matched []map[string]any
+	for _, entry := range entries {
+		match := false
+		if name, ok := entry["name"].(string); ok && strings.EqualFold(name, lowerTarget) {
+			match = true
+		}
+		if names, ok := entry["names"].([]any); ok {
+			for _, n := range names {
+				clean := strings.ToLower(strings.TrimPrefix(fmt.Sprint(n), "/"))
+				if clean == lowerTarget {
+					match = true
+					break
+				}
+			}
+		}
+		if match {
+			matched = append(matched, entry)
+		}
+	}
+	if len(matched) == 0 {
+		return nil
+	}
+	encoded, err := json.Marshal(matched)
+	if err != nil {
+		return nil
+	}
+	return encoded
 }
 
 func (assistant *Assistant) printCoreData(ctx context.Context, path, heading string, output io.Writer) error {
@@ -211,9 +284,14 @@ func looksMultiStep(query string) bool {
 	return false
 }
 
+var (
+	stepKeyRegex               = regexp.MustCompile(`"(?:step)+s*":`)
+	trailingDanglingQuoteRegex = regexp.MustCompile(`,\s*"+\s*([}\]])`)
+)
+
 func (assistant *Assistant) proposePlan(query string) (toolPlan, error) {
 	prompt := "Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. User request: " + query + "\nPLAN:"
-	generated, err := assistant.languageModel.Generate(prompt, 180, 0.25, 43)
+	generated, err := assistant.languageModel.Generate(prompt, 180, 0.05, 43)
 	if err != nil {
 		return toolPlan{}, err
 	}
@@ -221,6 +299,7 @@ func (assistant *Assistant) proposePlan(query string) (toolPlan, error) {
 }
 
 func extractFirstJSONObject(s string) (string, error) {
+	s = trailingDanglingQuoteRegex.ReplaceAllString(s, "$1")
 	start := strings.Index(s, "{")
 	if start < 0 {
 		return "", fmt.Errorf("model did not return a JSON plan")
@@ -261,15 +340,22 @@ func parsePlanJSON(generated string) (toolPlan, error) {
 	if err != nil {
 		return toolPlan{}, err
 	}
-	decoder := json.NewDecoder(strings.NewReader(rawJSON))
+	cleaned := stepKeyRegex.ReplaceAllString(rawJSON, `"steps":`)
+	decoder := json.NewDecoder(strings.NewReader(cleaned))
 	decoder.DisallowUnknownFields()
 	var plan toolPlan
 	if err := decoder.Decode(&plan); err != nil {
-		return toolPlan{}, err
-	}
-	var trailing any
-	if err := decoder.Decode(&trailing); err != io.EOF {
-		return toolPlan{}, fmt.Errorf("plan contains trailing content")
+		recovered := recoverToolSteps(rawJSON)
+		if len(recovered) > 0 {
+			plan = toolPlan{Steps: recovered}
+		} else {
+			return toolPlan{}, err
+		}
+	} else {
+		var trailing any
+		if err := decoder.Decode(&trailing); err != io.EOF {
+			return toolPlan{}, fmt.Errorf("plan contains trailing content")
+		}
 	}
 	if len(plan.Steps) == 0 || len(plan.Steps) > 5 {
 		return toolPlan{}, fmt.Errorf("plan must have one to five steps")
@@ -283,6 +369,25 @@ func parsePlanJSON(generated string) (toolPlan, error) {
 		}
 	}
 	return plan, nil
+}
+
+var stepObjectRegex = regexp.MustCompile(`\{[^{}]*"tool"[^{}]*\}`)
+
+func recoverToolSteps(raw string) []ToolStep {
+	matches := stepObjectRegex.FindAllString(raw, -1)
+	if len(matches) == 0 {
+		return nil
+	}
+	var steps []ToolStep
+	for _, m := range matches {
+		var step ToolStep
+		if err := json.Unmarshal([]byte(m), &step); err == nil && knownTool(step.Tool) {
+			if !toolRequiresTarget(step.Tool) || strings.TrimSpace(step.Target) != "" {
+				steps = append(steps, step)
+			}
+		}
+	}
+	return steps
 }
 
 func knownTool(tool string) bool {
@@ -339,8 +444,14 @@ func (assistant *Assistant) executePlan(ctx context.Context, plan toolPlan, conf
 				return err
 			}
 		case "containers":
-			if err := assistant.printCoreData(ctx, "/api/v2/services", "M3TAL containers and services", output); err != nil {
-				return err
+			if step.Target != "" {
+				if err := assistant.printCoreContainers(ctx, step.Target, output); err != nil {
+					return err
+				}
+			} else {
+				if err := assistant.printCoreData(ctx, "/api/v2/services", "M3TAL containers and services", output); err != nil {
+					return err
+				}
 			}
 		case "logs":
 			if err := assistant.printCoreData(ctx, "/api/v2/containers/"+url.PathEscape(step.Target)+"/logs?tail=100", "Recent logs for "+step.Target, output); err != nil {

@@ -52,6 +52,8 @@ var trainingExamples = []example{
 	{"list running containers", intentContainers}, {"show docker containers", intentContainers}, {"what containers are running", intentContainers},
 	{"list m3tal services", intentContainers}, {"show container status", intentContainers}, {"what is running in docker", intentContainers},
 	{"get the container list", intentContainers}, {"show all active services", intentContainers}, {"which containers are stopped", intentContainers},
+	{"is jellyfin running", intentContainers}, {"status of jellyfin", intentContainers}, {"is traefik running", intentContainers},
+	{"check container jellyfin", intentContainers}, {"is container jellyfin running", intentContainers}, {"check if jellyfin is running", intentContainers},
 	{"show container logs", intentLogs}, {"get logs for jellyfin", intentLogs}, {"view docker logs", intentLogs},
 	{"what do the service logs say", intentLogs}, {"show me logs from a container", intentLogs}, {"read the logs for traefik", intentLogs},
 	{"why is this container failing check its logs", intentLogs}, {"fetch recent logs", intentLogs}, {"container log output", intentLogs},
@@ -348,10 +350,12 @@ func deterministicIntent(query string) (intent, bool) {
 	if words["log"] || words["logs"] {
 		matches[intentLogs] = true
 	}
-	if (words["container"] || words["containers"]) && (words["list"] || words["show"] || words["running"] || words["status"] || words["which"]) {
+	if (words["container"] || words["containers"]) && (words["list"] || words["show"] || words["running"] || words["status"] || words["which"]) ||
+		(words["running"] && (words["is"] || words["check"] || words["what"])) ||
+		(words["status"] && (words["of"] || words["container"] || words["containers"] || words["service"] || words["services"]) && !words["system"]) {
 		matches[intentContainers] = true
 	}
-	if words["health"] || words["healthy"] || words["unhealthy"] || words["doctor"] {
+	if words["health"] || words["healthy"] || words["unhealthy"] || words["doctor"] || (words["system"] && words["status"]) {
 		matches[intentHealth] = true
 	}
 	if words["stats"] || words["metrics"] || words["cpu"] || words["memory"] || words["disk"] || words["uptime"] || words["telemetry"] {
