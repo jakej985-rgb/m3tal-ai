@@ -25,6 +25,7 @@ func run(arguments []string) error {
 	flags := flag.NewFlagSet("m3tal-ai", flag.ContinueOnError)
 	docsFlag := flags.String("docs", "", "additional documentation file or directory (path-list separated)")
 	apiURL := flags.String("api", os.Getenv("M3TAL_API_URL"), "M3TAL Core API URL (default http://localhost:5050)")
+	apiToken := flags.String("token", defaultAPIToken(), "M3TAL Core API token (default M3TAL_API_TOKEN or /etc/m3tal/.env)")
 	modelPath := flags.String("model", os.Getenv("M3TAL_MODEL_PATH"), "optional local language-model checkpoint")
 	interactive := flags.Bool("interactive", false, "run an interactive assistant session")
 	jsonOutput := flags.Bool("json", false, "print Core payloads as JSON")
@@ -50,7 +51,7 @@ func run(arguments []string) error {
 		docPaths = append(docPaths, filepath.SplitList(*docsFlag)...)
 	}
 
-	core := assistant.NewCoreAPI(*apiURL, os.Getenv("M3TAL_API_TOKEN"))
+	core := assistant.NewCoreAPI(*apiURL, *apiToken)
 	agent, err := assistant.New(docPaths, core)
 	if err != nil {
 		return err
@@ -171,4 +172,19 @@ func defaultDocsPaths() []string {
 		}
 	}
 	return paths
+}
+
+func defaultAPIToken() string {
+	if token := os.Getenv("M3TAL_API_TOKEN"); token != "" {
+		return token
+	}
+	if data, err := os.ReadFile("/etc/m3tal/.env"); err == nil {
+		for _, line := range strings.Split(string(data), "\n") {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "API_TOKEN=") {
+				return strings.Trim(strings.TrimPrefix(line, "API_TOKEN="), "\"'")
+			}
+		}
+	}
+	return ""
 }
