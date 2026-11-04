@@ -29,7 +29,7 @@ func (c *Config) Normalize() {
 }
 
 // DefaultConfig fits an instruction-capable training prototype on CPU-only machines.
-func DefaultConfig() Config { return Config{Context: 256, Width: 32, Layers: 2, Heads: 2} }
+func DefaultConfig() Config { return Config{Context: 256, Width: 64, Layers: 4, Heads: 4} }
 
 // parameter owns contiguous float32 values, gradients, and Adam state.
 type parameter struct {
@@ -87,13 +87,13 @@ func (m *Model) addParameter(parameter *parameter) *parameter {
 // NewModel initializes weights with a deterministic seed.
 func NewModel(config Config, tokenizer *Tokenizer, seed int64) (*Model, error) {
 	config.Normalize()
-	if config.Context < 2 || config.Context > 2048 || config.Width < 2 || config.Width > 256 || tokenizer == nil || len(tokenizer.Tokens) < 256 || len(tokenizer.Tokens) > 4096 {
+	if config.Context < 2 || config.Context > 2048 || config.Width < 2 || config.Width > 512 || tokenizer == nil || len(tokenizer.Tokens) < 256 || len(tokenizer.Tokens) > 4096 {
 		return nil, fmt.Errorf("invalid model config or tokenizer")
 	}
-	if config.Layers < 1 || config.Layers > 8 {
-		return nil, fmt.Errorf("layers must be between 1 and 8")
+	if config.Layers < 1 || config.Layers > 16 {
+		return nil, fmt.Errorf("layers must be between 1 and 16")
 	}
-	if config.Heads < 1 || config.Heads > 16 || config.Width%config.Heads != 0 {
+	if config.Heads < 1 || config.Heads > 32 || config.Width%config.Heads != 0 {
 		return nil, fmt.Errorf("width %d must be divisible by heads %d", config.Width, config.Heads)
 	}
 	rng := rand.New(rand.NewSource(seed))
@@ -343,8 +343,21 @@ func (m *Model) adamStep(learningRate float32) {
 	beta1, beta2 := float32(0.9), float32(0.999)
 	bias1 := float32(1 - math.Pow(float64(beta1), float64(m.step)))
 	bias2 := float32(1 - math.Pow(float64(beta2), float64(m.step)))
+
+	var totalNormSq float64
 	for _, p := range m.parameters {
-		for i, gradient := range p.gradient {
+		for _, g := range p.gradient {
+			totalNormSq += float64(g * g)
+		}
+	}
+	scale := float32(1.0)
+	if gradNorm := math.Sqrt(totalNormSq); gradNorm > 1.0 {
+		scale = float32(1.0 / gradNorm)
+	}
+
+	for _, p := range m.parameters {
+		for i, g := range p.gradient {
+			gradient := g * scale
 			p.first[i] = beta1*p.first[i] + (1-beta1)*gradient
 			p.second[i] = beta2*p.second[i] + (1-beta2)*gradient*gradient
 			first := p.first[i] / bias1
