@@ -10,7 +10,11 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 )
+
+const maxIndexedFileSize = 1024 * 1024
+const maxKnowledgeResults = 5
 
 type document struct {
 	source string
@@ -19,11 +23,24 @@ type document struct {
 	terms  map[string]int
 }
 
+// IndexStats summarizes what the knowledge base indexed and skipped.
+type IndexStats struct {
+	Roots            []string
+	MissingRoots     []string
+	Files            int
+	Documents        int
+	Apps             int
+	SkippedSensitive int
+	SkippedSymlink   int
+}
+
 // KnowledgeBase indexes local M3TAL documentation for lightweight retrieval.
 type KnowledgeBase struct {
 	documents    []document
 	documentFreq map[string]int
 	apps         []HubApp
+	stats        IndexStats
+	files        map[string]bool
 }
 
 // HubApp is an application registered in the M3TAL-Hub manifest.
@@ -37,41 +54,75 @@ type HubApp struct {
 
 // LoadKnowledgeBase indexes supported text documents found at files or roots.
 func LoadKnowledgeBase(roots []string) (*KnowledgeBase, error) {
-	base := &KnowledgeBase{}
+	base := &KnowledgeBase{files: make(map[string]bool)}
 	for _, root := range roots {
-		info, err := os.Stat(root)
+		if strings.TrimSpace(root) == "" {
+			continue
+		}
+		base.stats.Roots = append(base.stats.Roots, root)
+		absolute, err := filepath.Abs(root)
+		if err != nil {
+			return nil, fmt.Errorf("resolve knowledge path %q: %w", root, err)
+		}
+		resolvedRoot, err := filepath.EvalSymlinks(absolute)
 		if err != nil {
 			if os.IsNotExist(err) {
+				base.stats.MissingRoots = append(base.stats.MissingRoots, root)
 				continue
 			}
+			return nil, fmt.Errorf("resolve knowledge path %q: %w", root, err)
+		}
+		resolvedRoot = filepath.Clean(resolvedRoot)
+		info, err := os.Stat(resolvedRoot)
+		if err != nil {
 			return nil, fmt.Errorf("read knowledge path %q: %w", root, err)
 		}
 		if !info.IsDir() {
-			if supportedText(root) {
-				if err := base.addFile(root); err != nil {
+			if sensitiveFile(resolvedRoot) {
+				base.stats.SkippedSensitive++
+				continue
+			}
+			if supportedText(resolvedRoot) && withinRoot(resolvedRoot, resolvedRoot) {
+				if err := base.addFile(resolvedRoot); err != nil {
 					return nil, err
 				}
 			}
 			continue
 		}
-		err = filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+		err = filepath.WalkDir(resolvedRoot, func(path string, entry fs.DirEntry, walkErr error) error {
 			if walkErr != nil {
 				return walkErr
 			}
-			if entry.IsDir() && path != root && ignoredDirectory(entry.Name()) {
+			if entry.IsDir() && path != resolvedRoot && ignoredDirectory(entry.Name()) {
 				return filepath.SkipDir
 			}
-			if entry.IsDir() || !supportedText(path) {
+			if entry.IsDir() {
 				return nil
 			}
-			info, err := entry.Info()
+			if sensitiveFile(path) {
+				base.stats.SkippedSensitive++
+				return nil
+			}
+			if !supportedText(path) {
+				return nil
+			}
+			resolvedPath, err := filepath.EvalSymlinks(path)
 			if err != nil {
-				return err
-			}
-			if info.Size() > 1024*1024 {
+				base.stats.SkippedSymlink++
 				return nil
 			}
-			return base.addFile(path)
+			if !withinRoot(resolvedRoot, resolvedPath) {
+				base.stats.SkippedSymlink++
+				return nil
+			}
+			info, err := os.Stat(resolvedPath)
+			if err != nil {
+				return nil
+			}
+			if info.Size() > maxIndexedFileSize {
+				return nil
+			}
+			return base.addFile(resolvedPath)
 		})
 		if err != nil {
 			return nil, fmt.Errorf("index knowledge path %q: %w", root, err)
@@ -84,13 +135,44 @@ func LoadKnowledgeBase(roots []string) (*KnowledgeBase, error) {
 			base.documentFreq[term]++
 		}
 	}
+	base.stats.Documents = len(base.documents)
+	base.stats.Files = len(base.files)
+	base.stats.Apps = len(base.apps)
 	return base, nil
+}
+
+// Stats returns indexing counts collected during LoadKnowledgeBase.
+func (base *KnowledgeBase) Stats() IndexStats {
+	if base == nil {
+		return IndexStats{}
+	}
+	return base.stats
+}
+
+// Report describes indexed files and skipped paths for startup diagnostics.
+func (base *KnowledgeBase) Report() string {
+	if base == nil {
+		return "knowledge base is empty"
+	}
+	stats := base.stats
+	var b strings.Builder
+	fmt.Fprintf(&b, "indexed %d files (%d sections, %d Hub apps)", stats.Files, stats.Documents, stats.Apps)
+	if len(stats.MissingRoots) > 0 {
+		fmt.Fprintf(&b, "; missing roots: %s", strings.Join(stats.MissingRoots, ", "))
+	}
+	if stats.SkippedSensitive > 0 || stats.SkippedSymlink > 0 {
+		fmt.Fprintf(&b, "; skipped %d sensitive files and %d symlink escapes", stats.SkippedSensitive, stats.SkippedSymlink)
+	}
+	return b.String()
 }
 
 // Search returns the top matching document excerpts and their relative scores.
 func (base *KnowledgeBase) Search(query string, limit int) []KnowledgeResult {
 	if base == nil || limit <= 0 {
 		return nil
+	}
+	if limit > maxKnowledgeResults {
+		limit = maxKnowledgeResults
 	}
 	queryTerms := uniqueTerms(query)
 	if len(queryTerms) == 0 {
@@ -166,6 +248,13 @@ func (base *KnowledgeBase) addFile(path string) error {
 	if err != nil {
 		return fmt.Errorf("read document %q: %w", path, err)
 	}
+	if len(contents) > maxIndexedFileSize || !utf8.Valid(contents) || strings.IndexByte(string(contents[:min(len(contents), 8192)]), 0) >= 0 {
+		return nil
+	}
+	if base.files == nil {
+		base.files = make(map[string]bool)
+	}
+	base.files[filepath.Clean(path)] = true
 	if filepath.Base(path) == "manifest.yml" || filepath.Base(path) == "manifest.yaml" {
 		base.apps = append(base.apps, parseHubManifest(string(contents))...)
 	}
@@ -260,8 +349,36 @@ func splitDocument(content string) []documentChunk {
 }
 
 func supportedText(path string) bool {
+	if sensitiveFile(path) {
+		return false
+	}
 	switch strings.ToLower(filepath.Ext(path)) {
 	case ".md", ".txt", ".yml", ".yaml", ".json", ".go", ".dart", ".js", ".jsx", ".ts", ".tsx", ".html", ".css", ".py", ".sh", ".toml", ".xml":
+		return true
+	default:
+		return false
+	}
+}
+
+func withinRoot(root, candidate string) bool {
+	relative, err := filepath.Rel(root, candidate)
+	if err != nil || filepath.IsAbs(relative) || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return false
+	}
+	return true
+}
+
+func sensitiveFile(path string) bool {
+	name := strings.ToLower(filepath.Base(path))
+	extension := strings.ToLower(filepath.Ext(name))
+	if name == ".env" || strings.HasPrefix(name, ".env.") || name == "id_rsa" || name == "id_ed25519" {
+		return true
+	}
+	if strings.Contains(name, "secret") || strings.Contains(name, "credential") || strings.Contains(name, "private") {
+		return true
+	}
+	switch extension {
+	case ".key", ".pem", ".p12", ".pfx", ".keystore", ".crt":
 		return true
 	default:
 		return false
