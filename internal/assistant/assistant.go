@@ -683,13 +683,6 @@ func (assistant *Assistant) draftKnowledgeAnswer(query string, results []Knowled
 	return strings.TrimSpace(strings.TrimPrefix(answer, prompt.String())), nil
 }
 
-func printKnowledgeSources(results []KnowledgeResult, output io.Writer) {
-	fmt.Fprintln(output, "Sources:")
-	for _, result := range results {
-		fmt.Fprintf(output, "- %s — %s\n", result.Title, result.Source)
-	}
-}
-
 func printKnowledgeExcerpts(results []KnowledgeResult, output io.Writer) {
 	fmt.Fprintln(output, "M3TAL knowledge matches:")
 	for _, result := range results {

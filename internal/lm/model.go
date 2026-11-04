@@ -336,7 +336,6 @@ func (m *Model) backward(cache forwardCache, targets []int, mask []bool) {
 	}
 }
 
-func addInPlace(dst, src []float32) { for i := range dst { dst[i] += src[i] } }
 func zeroGradients(parameters []*parameter) { for _, p := range parameters { clear(p.gradient) } }
 
 func (m *Model) adamStep(learningRate float32) {
@@ -610,8 +609,6 @@ func (m *Model) inferenceBackend() inferenceBackend {
 	if m.backend == nil { m.backend = newCPUInferenceBackend(m) }
 	return m.backend
 }
-
-func validUTF8Prefix(data []byte) bool { return validUTF8Append(data, "") }
 
 func validUTF8Append(prefix []byte, suffix string) bool {
 	total := len(prefix)+len(suffix)
