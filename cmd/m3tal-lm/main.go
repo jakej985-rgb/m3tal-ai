@@ -28,6 +28,7 @@ func run(args []string) error {
 		evalArg := flags.String("eval-corpus", "", "optional separate held-out text path-list")
 		checkpoint := flags.String("checkpoint", "models/m3tal-small.json", "output checkpoint path")
 		includeInstructions := flags.Bool("include-instructions", false, "include curated self-owned instruction examples in training corpus")
+		instructMode := flags.Bool("instruct", false, "train using prompt-loss masking on instruction examples")
 		epochs := flags.Int("epochs", 2, "training epochs")
 		steps := flags.Int("steps", 40, "optimizer steps per epoch")
 		vocab := flags.Int("vocab", 320, "BPE tokenizer vocabulary size")
@@ -56,7 +57,12 @@ func run(args []string) error {
 		if err != nil {
 			return err
 		}
-		losses, err := model.Train(texts, *epochs, *steps, *learningRate)
+		var losses []float64
+		if *instructMode {
+			losses, err = model.TrainInstructions(lm.DefaultInstructionSet(), *epochs, *steps, *learningRate)
+		} else {
+			losses, err = model.Train(texts, *epochs, *steps, *learningRate)
+		}
 		if err != nil {
 			return err
 		}

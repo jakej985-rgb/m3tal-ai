@@ -78,3 +78,28 @@ func TestWriteAndLoadInstructionCorpus(t *testing.T) {
 		t.Fatal("instruction corpus missing expected content")
 	}
 }
+
+func TestTrainInstructionsLowersLoss(t *testing.T) {
+	examples := DefaultInstructionSet()
+	passages := FormatInstructionCorpus(examples)
+	tokenizer, err := TrainTokenizer(passages, 280)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	model, err := NewModel(Config{Context: 128, Width: 16}, tokenizer, 42)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	losses, err := model.TrainInstructions(examples, 3, 20, 0.005)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(losses) != 3 {
+		t.Fatalf("expected 3 losses, got %d", len(losses))
+	}
+	if losses[2] >= losses[0] {
+		t.Fatalf("instruction training did not lower loss: epoch 1 = %.4f, epoch 3 = %.4f", losses[0], losses[2])
+	}
+}

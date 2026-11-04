@@ -115,22 +115,65 @@ func TestExplicitGradientsMatchFiniteDifferences(t *testing.T) {
 	input := ids[:len(ids)-1]
 	targets := ids[1:]
 	zeroGradients(model.parameters)
-	model.backward(model.forward(input), targets)
+	model.backward(model.forward(input), targets, nil)
 
 	const epsilon float32 = 1e-3
 	for parameterIndex, parameter := range model.parameters {
 		for i, analytic := range parameter.gradient {
 			original := parameter.values[i]
 			parameter.values[i] = original + epsilon
-			plus := meanWindowLoss(model.forward(input), targets)
+			plus := meanWindowLoss(model.forward(input), targets, nil)
 			parameter.values[i] = original - epsilon
-			minus := meanWindowLoss(model.forward(input), targets)
+			minus := meanWindowLoss(model.forward(input), targets, nil)
 			parameter.values[i] = original
 			numerical := (plus - minus) / (2 * float64(epsilon))
 			difference := math.Abs(float64(analytic) - numerical)
 			scale := math.Max(1, math.Max(math.Abs(float64(analytic)), math.Abs(numerical)))
 			if difference > 5e-2 && difference/scale > 5e-2 {
 				t.Fatalf("parameter %d[%d] analytic=%g finite-difference=%g diff=%g", parameterIndex, i, analytic, numerical, difference)
+			}
+		}
+	}
+}
+
+func TestMaskedGradientsMatchFiniteDifferences(t *testing.T) {
+	tokenizer, err := TrainTokenizer([]string{"masked prompt completion test café"}, 256)
+	if err != nil {
+		t.Fatal(err)
+	}
+	model, err := NewModel(Config{Context: 6, Width: 4}, tokenizer, 31)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := tokenizer.Encode("masked")
+	if len(ids) < 4 {
+		t.Fatal("expected prompt to encode to at least four tokens")
+	}
+	input := ids[:len(ids)-1]
+	targets := ids[1:]
+	// Mask: first token masked out (false), remaining active (true)
+	mask := make([]bool, len(targets))
+	for i := 1; i < len(mask); i++ {
+		mask[i] = true
+	}
+
+	zeroGradients(model.parameters)
+	model.backward(model.forward(input), targets, mask)
+
+	const epsilon float32 = 1e-3
+	for parameterIndex, parameter := range model.parameters {
+		for i, analytic := range parameter.gradient {
+			original := parameter.values[i]
+			parameter.values[i] = original + epsilon
+			plus := meanWindowLoss(model.forward(input), targets, mask)
+			parameter.values[i] = original - epsilon
+			minus := meanWindowLoss(model.forward(input), targets, mask)
+			parameter.values[i] = original
+			numerical := (plus - minus) / (2 * float64(epsilon))
+			difference := math.Abs(float64(analytic) - numerical)
+			scale := math.Max(1, math.Max(math.Abs(float64(analytic)), math.Abs(numerical)))
+			if difference > 5e-2 && difference/scale > 5e-2 {
+				t.Fatalf("masked parameter %d[%d] analytic=%g finite-difference=%g diff=%g", parameterIndex, i, analytic, numerical, difference)
 			}
 		}
 	}

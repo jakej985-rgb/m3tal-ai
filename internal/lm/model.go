@@ -16,8 +16,8 @@ type Config struct {
 	Width   int `json:"width"`
 }
 
-// DefaultConfig fits a small training prototype on CPU-only machines.
-func DefaultConfig() Config { return Config{Context: 32, Width: 16} }
+// DefaultConfig fits an instruction-capable training prototype on CPU-only machines.
+func DefaultConfig() Config { return Config{Context: 128, Width: 32} }
 
 // parameter owns contiguous float32 values, gradients, and Adam state.
 type parameter struct {
@@ -72,7 +72,7 @@ func (m *Model) addParameter(parameter *parameter) *parameter {
 
 // NewModel initializes weights with a deterministic seed.
 func NewModel(config Config, tokenizer *Tokenizer, seed int64) (*Model, error) {
-	if config.Context < 2 || config.Context > 256 || config.Width < 2 || config.Width > 64 || tokenizer == nil || len(tokenizer.Tokens) < 256 || len(tokenizer.Tokens) > 2048 {
+	if config.Context < 2 || config.Context > 512 || config.Width < 2 || config.Width > 128 || tokenizer == nil || len(tokenizer.Tokens) < 256 || len(tokenizer.Tokens) > 4096 {
 		return nil, fmt.Errorf("invalid model config or tokenizer")
 	}
 	rng := rand.New(rand.NewSource(seed))
@@ -130,13 +130,28 @@ func (m *Model) forward(ids []int) forwardCache {
 	return forwardFloat32(m.Config, len(m.Tokenizer.Tokens), m.parameterView(), ids)
 }
 
-func (m *Model) backward(cache forwardCache, targets []int) {
+func (m *Model) backward(cache forwardCache, targets []int, mask []bool) {
 	width, vocab, rows := m.Config.Width, len(m.Tokenizer.Tokens), len(cache.ids)
-	invRows := float32(1.0 / float64(rows))
+	activeCount := rows
+	if mask != nil {
+		activeCount = 0
+		for i := 0; i < rows; i++ {
+			if i < len(mask) && mask[i] {
+				activeCount++
+			}
+		}
+		if activeCount == 0 {
+			return
+		}
+	}
+	invRows := float32(1.0 / float64(activeCount))
 	
-	// Gradient for logits: softmax derivative at all positions for mean window loss
+	// Gradient for logits: softmax derivative at active positions
 	gradientLogits := make([]float32, rows*vocab)
 	for i := 0; i < rows; i++ {
+		if mask != nil && (i >= len(mask) || !mask[i]) {
+			continue
+		}
 		for j := 0; j < vocab; j++ {
 			gradientLogits[i*vocab+j] = cache.probabilities[i*vocab+j] * invRows
 		}
@@ -307,8 +322,8 @@ func tokenLoss32(logits []float32, target int) float64 {
 	return math.Log(total) + float64(maximum) - float64(logits[target])
 }
 
-// Mean window loss: average cross-entropy over all positions
-func meanWindowLoss(cache forwardCache, targets []int) float64 {
+// Mean window loss: average cross-entropy over active positions (all if mask is nil)
+func meanWindowLoss(cache forwardCache, targets []int, mask []bool) float64 {
 	if len(targets) == 0 || len(cache.ids) == 0 {
 		return 0
 	}
@@ -318,11 +333,19 @@ func meanWindowLoss(cache forwardCache, targets []int) float64 {
 	}
 	vocab := len(cache.logits) / len(cache.ids)
 	totalLoss := 0.0
+	activeCount := 0
 	for i := 0; i < rows; i++ {
+		if mask != nil && (i >= len(mask) || !mask[i]) {
+			continue
+		}
 		rowLogits := cache.logits[i*vocab : (i+1)*vocab]
 		totalLoss += tokenLoss32(rowLogits, targets[i])
+		activeCount++
 	}
-	return totalLoss / float64(rows)
+	if activeCount == 0 {
+		return 0
+	}
+	return totalLoss / float64(activeCount)
 }
 
 // Train performs causal full-window training with float32 parameters and Adam updates.
@@ -345,9 +368,82 @@ func (m *Model) Train(texts []string, epochs, stepsPerEpoch int, learningRate fl
 			if len(window) < 2 { continue }
 			cache := m.forward(window[:len(window)-1])
 			targets := window[1:]
-			totalLoss += meanWindowLoss(cache, targets)
+			totalLoss += meanWindowLoss(cache, targets, nil)
 			zeroGradients(m.parameters)
-			m.backward(cache, targets)
+			m.backward(cache, targets, nil)
+			m.adamStep(float32(learningRate))
+		}
+		losses = append(losses, totalLoss/float64(stepsPerEpoch))
+	}
+	return losses, nil
+}
+
+// TrainInstructions trains the model on instruction prompt-completion pairs
+// using prompt loss masking. Gradients are only computed on completion tokens.
+func (m *Model) TrainInstructions(examples []InstructionExample, epochs, stepsPerEpoch int, learningRate float64) ([]float64, error) {
+	if epochs <= 0 || stepsPerEpoch <= 0 || learningRate <= 0 || math.IsNaN(learningRate) || math.IsInf(learningRate, 0) {
+		return nil, fmt.Errorf("epochs, steps, and finite positive learning rate are required")
+	}
+	if len(examples) == 0 {
+		return nil, fmt.Errorf("instruction examples required")
+	}
+	m.backend = nil
+
+	type preparedExample struct {
+		input   []int
+		targets []int
+		mask    []bool
+	}
+
+	var prepared []preparedExample
+	for _, ex := range examples {
+		promptIDs := m.Tokenizer.Encode(ex.Prompt)
+		completionIDs := m.Tokenizer.Encode(" " + strings.TrimSpace(ex.Completion))
+		ids := append(promptIDs, completionIDs...)
+		if len(ids) < 2 {
+			continue
+		}
+		// Take context window ending at completion
+		start := 0
+		if len(ids) > m.Config.Context+1 {
+			start = len(ids) - (m.Config.Context + 1)
+		}
+		window := ids[start:]
+		promptLen := len(promptIDs) - start
+		if promptLen < 0 {
+			promptLen = 0
+		}
+		input := window[:len(window)-1]
+		targets := window[1:]
+		mask := make([]bool, len(targets))
+		hasActive := false
+		for i := range targets {
+			// Target i predicts window[i+1]; active if it's in completion
+			if i+1 >= promptLen {
+				mask[i] = true
+				hasActive = true
+			}
+		}
+		if hasActive {
+			prepared = append(prepared, preparedExample{input: input, targets: targets, mask: mask})
+		}
+	}
+
+	if len(prepared) == 0 {
+		return nil, fmt.Errorf("no valid instruction examples within context length")
+	}
+
+	rng := rand.New(rand.NewSource(71))
+	losses := make([]float64, 0, epochs)
+	for epoch := 0; epoch < epochs; epoch++ {
+		var totalLoss float64
+		for step := 0; step < stepsPerEpoch; step++ {
+			item := prepared[rng.Intn(len(prepared))]
+			cache := m.forward(item.input)
+			loss := meanWindowLoss(cache, item.targets, item.mask)
+			totalLoss += loss
+			zeroGradients(m.parameters)
+			m.backward(cache, item.targets, item.mask)
 			m.adamStep(float32(learningRate))
 		}
 		losses = append(losses, totalLoss/float64(stepsPerEpoch))
