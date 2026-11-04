@@ -1,0 +1,158 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1320" viewBox="0 0 1800 1320" role="img" aria-labelledby="title desc">
+  <title id="title">M3TAL AI GitHub issue 1 roadmap</title>
+  <desc id="desc">A phased roadmap for adding quantized checkpoints and CPU, GPU, and mixed layer placement while retaining CPU inference as the correctness reference.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#111827"/><stop offset="1" stop-color="#0b1220"/>
+    </linearGradient>
+    <linearGradient id="hero" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#123b42"/><stop offset="0.55" stop-color="#1d3152"/><stop offset="1" stop-color="#32274c"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%">
+      <feDropShadow dx="0" dy="8" stdDeviation="9" flood-color="#000" flood-opacity=".22"/>
+    </filter>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M1 1L11 6L1 11" fill="none" stroke="#8293aa" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+    <style>
+      text{font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;fill:#eef4fb}
+      .muted{fill:#a9b7c9}.dim{fill:#8091a8}.eyebrow{font-size:14px;font-weight:750;letter-spacing:2px}.heroTitle{font-size:38px;font-weight:760;letter-spacing:-.5px}.heroSub{font-size:18px}.cardTitle{font-size:19px;font-weight:750}.cardTag{font-size:12px;font-weight:750;letter-spacing:1.3px}.body{font-size:15px}.small{font-size:13px}.section{font-size:17px;font-weight:760}.pill{font-size:12px;font-weight:700}
+    </style>
+  </defs>
+
+  <rect width="1800" height="1320" fill="url(#bg)"/>
+  <circle cx="1690" cy="80" r="180" fill="#67e8c4" opacity=".035"/>
+  <circle cx="150" cy="1180" r="220" fill="#a78bfa" opacity=".035"/>
+
+  <text x="58" y="45" class="eyebrow" fill="#72e3c2">M3TAL AI  /  DELIVERY MAP</text>
+  <rect x="58" y="68" width="1684" height="150" rx="22" fill="url(#hero)" stroke="#33536a" stroke-width="1"/>
+  <text x="91" y="116" class="heroTitle">Issue #1 · Quantized weights + CPU/GPU offloading</text>
+  <text x="91" y="153" class="heroSub muted">Keep the from-scratch model lightweight while making inference fit the machine.</text>
+  <text x="91" y="187" class="small muted">Anchor: <tspan fill="#d3e1f1">CPU remains the correctness reference</tspan><tspan dx="25">•</tspan><tspan dx="12" fill="#d3e1f1">GPU is optional</tspan><tspan dx="25">•</tspan><tspan dx="12" fill="#d3e1f1">no pretrained weights</tspan></text>
+  <rect x="1461" y="91" width="245" height="92" rx="16" fill="#101a2a" opacity=".74" stroke="#4a5876"/>
+  <text x="1483" y="122" class="cardTag" fill="#c4b5fd">TARGET MACHINE</text>
+  <text x="1483" y="151" class="body" font-weight="730">GTX 960 · 4 GB VRAM</text>
+  <text x="1483" y="173" class="small muted">16 GB system RAM</text>
+
+  <text x="58" y="263" class="eyebrow muted">BUILD SEQUENCE</text>
+  <text x="1742" y="263" class="small dim" text-anchor="end">Outcome-based phases · no dates assigned</text>
+
+  <!-- sequence arrows -->
+  <path d="M326 504H350 M608 504H632 M890 504H914 M1172 504H1196 M1454 504H1478" stroke="#8293aa" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Phase 0 -->
+  <g filter="url(#shadow)">
+    <rect x="58" y="292" width="268" height="504" rx="18" fill="#182336" stroke="#40516a"/>
+    <path d="M76 292H308Q326 292 326 310V301H58V310Q58 292 76 292Z" fill="#8192a9"/>
+    <circle cx="91" cy="337" r="17" fill="#35455d"/><text x="91" y="343" font-size="15" font-weight="800" text-anchor="middle">0</text>
+    <text x="120" y="334" class="cardTag muted">FOUNDATION</text><text x="80" y="380" class="cardTitle">Baseline &amp; corpus</text>
+    <text x="80" y="418" class="body muted"><tspan x="80" dy="0">• Preserve today's CPU</tspan><tspan x="98" dy="22">inference path</tspan><tspan x="80" dy="30">• Fix a held-out corpus</tspan><tspan x="98" dy="22">and quality measure</tspan><tspan x="80" dy="30">• Capture output, memory,</tspan><tspan x="98" dy="22">and speed baselines</tspan><tspan x="80" dy="30">• Record checkpoint format</tspan></text>
+    <rect x="76" y="700" width="232" height="70" rx="12" fill="#202d40"/>
+    <text x="92" y="725" class="cardTag" fill="#cbd5e1">GATE</text><text x="92" y="749" class="small">Repeatable CPU reference</text>
+  </g>
+
+  <!-- Phase 1 -->
+  <g filter="url(#shadow)">
+    <rect x="340" y="292" width="268" height="504" rx="18" fill="#172b31" stroke="#39706a"/>
+    <path d="M358 292H590Q608 292 608 310V301H340V310Q340 292 358 292Z" fill="#45c8a4"/>
+    <circle cx="373" cy="337" r="17" fill="#1c594e"/><text x="373" y="343" font-size="15" font-weight="800" text-anchor="middle">1</text>
+    <text x="402" y="334" class="cardTag" fill="#78e7c6">CPU BACKEND</text><text x="362" y="380" class="cardTitle">Backend boundary</text>
+    <text x="362" y="418" class="body muted"><tspan x="362" dy="0">• Define a small compute</tspan><tspan x="380" dy="22">backend contract</tspan><tspan x="362" dy="30">• Keep pure-Go CPU path</tspan><tspan x="380" dy="22">as the reference</tspan><tspan x="362" dy="30">• Route model operations</tspan><tspan x="380" dy="22">through the boundary</tspan><tspan x="362" dy="30">• Keep CPU-only supported</tspan></text>
+    <rect x="358" y="700" width="232" height="70" rx="12" fill="#1b3a3d"/>
+    <text x="374" y="725" class="cardTag" fill="#78e7c6">GATE</text><text x="374" y="749" class="small">Same behavior via CPU backend</text>
+  </g>
+
+  <!-- Phase 2 -->
+  <g filter="url(#shadow)">
+    <rect x="622" y="292" width="268" height="504" rx="18" fill="#2a2637" stroke="#69528c"/>
+    <path d="M640 292H872Q890 292 890 310V301H622V310Q622 292 640 292Z" fill="#a78bfa"/>
+    <circle cx="655" cy="337" r="17" fill="#4f3b73"/><text x="655" y="343" font-size="15" font-weight="800" text-anchor="middle">2</text>
+    <text x="684" y="334" class="cardTag" fill="#c4b5fd">CHECKPOINTS</text><text x="644" y="380" class="cardTitle">Quantize weights</text>
+    <text x="644" y="418" class="body muted"><tspan x="644" dy="0">• Add documented weight</tspan><tspan x="662" dy="22">precision options</tspan><tspan x="644" dy="30">• Save and load quantized</tspan><tspan x="662" dy="22">from-scratch checkpoints</tspan><tspan x="644" dy="30">• Keep full precision usable</tspan><tspan x="644" dy="30">• Measure quality loss on</tspan><tspan x="662" dy="22">held-out text</tspan></text>
+    <rect x="640" y="700" width="232" height="70" rx="12" fill="#382d4d"/>
+    <text x="656" y="725" class="cardTag" fill="#d6c9ff">GATE</text><text x="656" y="749" class="small">Smaller checkpoint; quality known</text>
+  </g>
+
+  <!-- Phase 3 -->
+  <g filter="url(#shadow)">
+    <rect x="904" y="292" width="268" height="504" rx="18" fill="#302a20" stroke="#89693a"/>
+    <path d="M922 292H1154Q1172 292 1172 310V301H904V310Q904 292 922 292Z" fill="#f4b45e"/>
+    <circle cx="937" cy="337" r="17" fill="#735329"/><text x="937" y="343" font-size="15" font-weight="800" text-anchor="middle">3</text>
+    <text x="966" y="334" class="cardTag" fill="#ffd18e">PLACEMENT</text><text x="926" y="380" class="cardTitle">Plan layer residency</text>
+    <text x="926" y="418" class="body muted"><tspan x="926" dy="0">• Configure how many</tspan><tspan x="944" dy="22">layers use VRAM</tspan><tspan x="926" dy="30">• Detect available GPU</tspan><tspan x="944" dy="22">memory at load time</tspan><tspan x="926" dy="30">• Report each layer's</tspan><tspan x="944" dy="22">assigned backend</tspan><tspan x="926" dy="30">• Fallback cleanly if GPU</tspan><tspan x="944" dy="22">is missing or too small</tspan></text>
+    <rect x="922" y="700" width="232" height="70" rx="12" fill="#40341f"/>
+    <text x="938" y="725" class="cardTag" fill="#ffd18e">GATE</text><text x="938" y="749" class="small">Placement fits or falls back</text>
+  </g>
+
+  <!-- Phase 4 -->
+  <g filter="url(#shadow)">
+    <rect x="1186" y="292" width="268" height="504" rx="18" fill="#1d2938" stroke="#456d9a"/>
+    <path d="M1204 292H1436Q1454 292 1454 310V301H1186V310Q1186 292 1204 292Z" fill="#61a9ff"/>
+    <circle cx="1219" cy="337" r="17" fill="#31577f"/><text x="1219" y="343" font-size="15" font-weight="800" text-anchor="middle">4</text>
+    <text x="1248" y="334" class="cardTag" fill="#9dcaff">GPU + MIXED</text><text x="1208" y="380" class="cardTitle">Run across devices</text>
+    <text x="1208" y="418" class="body muted"><tspan x="1208" dy="0">• Add optional GPU backend</tspan><tspan x="1208" dy="30">• Keep weights resident on</tspan><tspan x="1226" dy="22">their assigned device</tspan><tspan x="1208" dy="30">• Transfer activations only</tspan><tspan x="1226" dy="22">at CPU/GPU boundaries</tspan><tspan x="1208" dy="30">• Support CPU-only, GPU-only,</tspan><tspan x="1226" dy="22">and mixed execution</tspan></text>
+    <rect x="1204" y="700" width="232" height="70" rx="12" fill="#263d59"/>
+    <text x="1220" y="725" class="cardTag" fill="#9dcaff">GATE</text><text x="1220" y="749" class="small">Correct layer handoff</text>
+  </g>
+
+  <!-- Phase 5 -->
+  <g filter="url(#shadow)">
+    <rect x="1468" y="292" width="268" height="504" rx="18" fill="#31252b" stroke="#8b4d5e"/>
+    <path d="M1486 292H1718Q1736 292 1736 310V301H1468V310Q1468 292 1486 292Z" fill="#fb7185"/>
+    <circle cx="1501" cy="337" r="17" fill="#783c4a"/><text x="1501" y="343" font-size="15" font-weight="800" text-anchor="middle">5</text>
+    <text x="1530" y="334" class="cardTag" fill="#fda4af">ACCEPTANCE</text><text x="1490" y="380" class="cardTitle">Verify &amp; benchmark</text>
+    <text x="1490" y="418" class="body muted"><tspan x="1490" dy="0">• Compare quantized and</tspan><tspan x="1508" dy="22">full-precision quality</tspan><tspan x="1490" dy="30">• Check CPU/GPU handoffs</tspan><tspan x="1490" dy="30">• Benchmark speed + memory</tspan><tspan x="1490" dy="30">• Verify CPU fallback and</tspan><tspan x="1508" dy="22">checkpoint preservation</tspan><tspan x="1490" dy="30">• Use only project-trained</tspan><tspan x="1508" dy="22">weights</tspan></text>
+    <rect x="1486" y="700" width="232" height="70" rx="12" fill="#472d37"/>
+    <text x="1502" y="725" class="cardTag" fill="#fda4af">GATE</text><text x="1502" y="749" class="small">All issue criteria demonstrated</text>
+  </g>
+
+  <!-- Runtime placement map -->
+  <rect x="58" y="830" width="1054" height="300" rx="18" fill="#141f30" stroke="#34445b"/>
+  <text x="84" y="869" class="section">Runtime placement map</text>
+  <text x="1086" y="869" class="small dim" text-anchor="end">Choose placement at load time · keep weights resident</text>
+  <rect x="84" y="895" width="302" height="120" rx="14" fill="#1c2939" stroke="#42546c"/>
+  <text x="105" y="926" class="cardTag muted">CPU-ONLY · REFERENCE</text>
+  <rect x="106" y="946" width="38" height="34" rx="6" fill="#718096"/><rect x="151" y="946" width="38" height="34" rx="6" fill="#718096"/><rect x="196" y="946" width="38" height="34" rx="6" fill="#718096"/><rect x="241" y="946" width="38" height="34" rx="6" fill="#718096"/><rect x="286" y="946" width="38" height="34" rx="6" fill="#718096"/><text x="344" y="969" class="small muted" text-anchor="end">RAM</text>
+  <text x="105" y="1001" class="small muted">All layers execute on CPU</text>
+
+  <rect x="403" y="895" width="302" height="120" rx="14" fill="#1c2939" stroke="#42546c"/>
+  <text x="424" y="926" class="cardTag" fill="#9dcaff">GPU-ONLY · IF IT FITS</text>
+  <rect x="425" y="946" width="38" height="34" rx="6" fill="#4c8bd0"/><rect x="470" y="946" width="38" height="34" rx="6" fill="#4c8bd0"/><rect x="515" y="946" width="38" height="34" rx="6" fill="#4c8bd0"/><rect x="560" y="946" width="38" height="34" rx="6" fill="#4c8bd0"/><rect x="605" y="946" width="38" height="34" rx="6" fill="#4c8bd0"/><text x="683" y="969" class="small muted" text-anchor="end">VRAM</text>
+  <text x="424" y="1001" class="small muted">All layers resident on GPU</text>
+
+  <rect x="722" y="895" width="364" height="120" rx="14" fill="#1c2939" stroke="#42546c"/>
+  <text x="743" y="926" class="cardTag" fill="#ffd18e">MIXED · CONFIGURABLE SPLIT</text>
+  <rect x="744" y="946" width="38" height="34" rx="6" fill="#4c8bd0"/><rect x="789" y="946" width="38" height="34" rx="6" fill="#4c8bd0"/><rect x="834" y="946" width="38" height="34" rx="6" fill="#718096"/><rect x="879" y="946" width="38" height="34" rx="6" fill="#718096"/><rect x="924" y="946" width="38" height="34" rx="6" fill="#718096"/>
+  <path d="M874 938V990" stroke="#f4b45e" stroke-width="2" stroke-dasharray="4 4"/>
+  <text x="1065" y="969" class="small muted" text-anchor="end">VRAM → RAM</text>
+  <text x="743" y="1001" class="small muted">Only activations cross device boundaries</text>
+
+  <rect x="84" y="1034" width="1002" height="66" rx="13" fill="#292335" stroke="#68527e"/>
+  <circle cx="111" cy="1067" r="12" fill="#a78bfa"/><path d="M105 1067l4 4 8-9" fill="none" stroke="#151221" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="136" y="1062" class="cardTag" fill="#d6c9ff">IF GPU IS UNAVAILABLE OR ALLOCATION FAILS</text>
+  <text x="136" y="1084" class="small muted">Fall back to CPU inference; preserve the checkpoint and report the chosen placement.</text>
+
+  <!-- Completion gate -->
+  <rect x="1134" y="830" width="602" height="300" rx="18" fill="#172b2a" stroke="#39706a"/>
+  <text x="1160" y="869" class="section">Issue complete when…</text>
+  <g class="body">
+    <circle cx="1170" cy="912" r="8" fill="#45c8a4"/><path d="M1166 912l3 3 6-7" fill="none" stroke="#0f2925" stroke-width="2"/><text x="1190" y="917" class="body muted">Project-trained model saves, quantizes, loads, generates</text>
+    <circle cx="1170" cy="951" r="8" fill="#45c8a4"/><path d="M1166 951l3 3 6-7" fill="none" stroke="#0f2925" stroke-width="2"/><text x="1190" y="956" class="body muted">CPU-only inference remains supported</text>
+    <circle cx="1170" cy="990" r="8" fill="#45c8a4"/><path d="M1166 990l3 3 6-7" fill="none" stroke="#0f2925" stroke-width="2"/><text x="1190" y="995" class="body muted">Mixed placement is configurable and reported</text>
+    <circle cx="1170" cy="1029" r="8" fill="#45c8a4"/><path d="M1166 1029l3 3 6-7" fill="none" stroke="#0f2925" stroke-width="2"/><text x="1190" y="1034" class="body muted">GPU failure falls back to CPU without data loss</text>
+    <circle cx="1170" cy="1068" r="8" fill="#45c8a4"/><path d="M1166 1068l3 3 6-7" fill="none" stroke="#0f2925" stroke-width="2"/><text x="1190" y="1073" class="body muted">Quality, handoff correctness, memory, speed measured</text>
+  </g>
+
+  <path d="M58 1164H1736" stroke="#2c3b50" stroke-width="1"/>
+  <text x="58" y="1201" class="cardTag" fill="#c4b5fd">DESIGN RULES</text>
+  <text x="58" y="1230" class="small muted">CPU path is the reference</text>
+  <circle cx="235" cy="1226" r="3" fill="#64748b"/>
+  <text x="253" y="1230" class="small muted">GPU stays optional</text>
+  <circle cx="398" cy="1226" r="3" fill="#64748b"/>
+  <text x="416" y="1230" class="small muted">Quantization tradeoffs are measured</text>
+  <circle cx="704" cy="1226" r="3" fill="#64748b"/>
+  <text x="722" y="1230" class="small muted">No external model weights</text>
+  <circle cx="937" cy="1226" r="3" fill="#64748b"/>
+  <text x="955" y="1230" class="small muted">No repeated weight transfers during generation</text>
+  <text x="1738" y="1276" class="small dim" text-anchor="end">Source: <tspan fill="#b7c8dc">github.com/jakej985-rgb/m3tal-ai/issues/1</tspan></text>
+</svg>
