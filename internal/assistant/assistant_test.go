@@ -11,7 +11,7 @@ import (
 )
 
 func TestAskUsesCoreForStats(t *testing.T) {
-	core := NewCoreAPI("http://m3tal.test", "")
+	core := NewCoreAPI("https://m3tal.test", "")
 	core.Client = &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		if request.URL.Path != "/api/v2/system/stats" {
 			t.Errorf("unexpected API path %q", request.URL.Path)
@@ -27,8 +27,22 @@ func TestAskUsesCoreForStats(t *testing.T) {
 	if err := agent.Ask(context.Background(), "show system stats", nil, &output); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(output.String(), `"cpu_usage": 15`) {
+	if !strings.Contains(output.String(), "cpu_usage: 15") {
 		t.Fatalf("stats response missing from output: %s", output.String())
+	}
+}
+
+func TestUnknownRequestAsksForClarificationWithoutCallingCore(t *testing.T) {
+	agent, err := New(nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	if err := agent.Ask(context.Background(), "qwerty blargh", nil, &output); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), "I'm not sure") {
+		t.Fatalf("unknown fallback = %q", output.String())
 	}
 }
 
@@ -53,10 +67,13 @@ func TestAskListsApplicationsFromHubManifest(t *testing.T) {
 }
 
 func TestAskConfirmsStackActionsBeforeCallingCore(t *testing.T) {
-	calls := 0
-	core := NewCoreAPI("http://m3tal.test", "")
+	postCalls := 0
+	core := NewCoreAPI("https://m3tal.test", "")
 	core.Client = &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
-		calls++
+		if request.Method == http.MethodGet && request.URL.Path == "/api/v2/stacks" {
+			return mockResponse(request, http.StatusOK, `{"status":"success","data":[{"name":"media"}]}`), nil
+		}
+		postCalls++
 		if request.Method != http.MethodPost || (request.URL.Path != "/api/v2/stacks/media/down" && request.URL.Path != "/api/v2/stacks/media/up") {
 			t.Errorf("unexpected request: %s %s", request.Method, request.URL.Path)
 		}
@@ -71,7 +88,7 @@ func TestAskConfirmsStackActionsBeforeCallingCore(t *testing.T) {
 	confirmed := false
 	err = agent.Ask(context.Background(), "restart the media stack", func(action string) bool {
 		confirmed = true
-		if action != "restart stack media" {
+		if action != "confirm restart stack media" {
 			t.Errorf("confirmation prompt = %q", action)
 		}
 		return false
@@ -79,8 +96,8 @@ func TestAskConfirmsStackActionsBeforeCallingCore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !confirmed || calls != 0 || !strings.Contains(output.String(), "Canceled") {
-		t.Fatalf("denied action state: confirmed=%v calls=%d output=%q", confirmed, calls, output.String())
+	if !confirmed || postCalls != 0 || !strings.Contains(output.String(), "Canceled") {
+		t.Fatalf("denied action state: confirmed=%v mutation calls=%d output=%q", confirmed, postCalls, output.String())
 	}
 
 	output.Reset()
@@ -88,7 +105,92 @@ func TestAskConfirmsStackActionsBeforeCallingCore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if calls != 2 || !strings.Contains(output.String(), "Stack restart media completed") {
-		t.Fatalf("confirmed action state: calls=%d output=%q", calls, output.String())
+	if postCalls != 2 || !strings.Contains(output.String(), "stack restart media completed") {
+		t.Fatalf("confirmed action state: mutation calls=%d output=%q", postCalls, output.String())
+	}
+}
+
+func TestMutationTargetsMustBeInLiveAllowlist(t *testing.T) {
+	cases := []struct {
+		kind, path, data string
+	}{
+		{"stack", "/api/v2/stacks", `[{"name":"media"}]`},
+		{"container", "/api/v2/services", `[{"names":["/jellyfin"]}]`},
+		{"service", "/api/v2/system/services", `[{"name":"m3tal-api.service"}]`},
+	}
+	for _, test := range cases {
+		t.Run(test.kind, func(t *testing.T) {
+			core := NewCoreAPI("https://m3tal.test", "")
+			core.Client = &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+				if request.Method != http.MethodGet || request.URL.Path != test.path {
+					t.Errorf("unexpected request: %s %s", request.Method, request.URL.Path)
+				}
+				return mockResponse(request, http.StatusOK, `{"status":"success","data":`+test.data+`}`), nil
+			})}
+			agent := &Assistant{core: core}
+			name := map[string]string{"stack": "media", "container": "jellyfin", "service": "m3tal-api.service"}[test.kind]
+			if err := agent.validateTarget(context.Background(), test.kind, name); err != nil {
+				t.Fatalf("valid target rejected: %v", err)
+			}
+			if err := agent.validateTarget(context.Background(), test.kind, "unlisted-target"); err == nil {
+				t.Fatal("unlisted target accepted")
+			}
+		})
+	}
+}
+
+func TestContainerAndServiceMutationsUseScopedEndpoints(t *testing.T) {
+	for _, test := range []struct{ kind, name, want string }{
+		{"container", "jellyfin", "/api/v2/containers/jellyfin/restart"},
+		{"service", "m3tal-api.service", "/api/v2/system/services/m3tal-api.service/restart"},
+	} {
+		t.Run(test.kind, func(t *testing.T) {
+			core := NewCoreAPI("https://m3tal.test", "")
+			core.Client = &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+				if request.Method != http.MethodPost || request.URL.Path != test.want {
+					t.Errorf("request = %s %s, want POST %s", request.Method, request.URL.Path, test.want)
+				}
+				return mockResponse(request, http.StatusOK, `{"status":"success","data":{"ok":true}}`), nil
+			})}
+			if _, err := (&Assistant{core: core}).mutate(context.Background(), test.kind, test.name, "restart"); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestUnlistedStackNeverReachesMutationEndpoint(t *testing.T) {
+	postCalls := 0
+	core := NewCoreAPI("https://m3tal.test", "")
+	core.Client = &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.Method == http.MethodGet {
+			return mockResponse(request, http.StatusOK, `{"status":"success","data":[]}`), nil
+		}
+		postCalls++
+		return mockResponse(request, http.StatusOK, `{"status":"success","data":{}}`), nil
+	})}
+	agent, err := New(nil, core)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := agent.Ask(context.Background(), "restart stack unknown", func(string) bool { return true }, &bytes.Buffer{}); err == nil {
+		t.Fatal("expected unlisted stack to be rejected")
+	}
+	if postCalls != 0 {
+		t.Fatalf("unlisted target caused %d mutation requests", postCalls)
+	}
+}
+
+func TestStackRestartReportsPartialFailure(t *testing.T) {
+	core := NewCoreAPI("https://m3tal.test", "")
+	core.Client = &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.Path == "/api/v2/stacks/media/down" {
+			return mockResponse(request, http.StatusOK, `{"status":"success","data":{"ok":true}}`), nil
+		}
+		return mockResponse(request, http.StatusInternalServerError, `{"status":"error","error":{"code":"START_FAILED","message":"compose failed"}}`), nil
+	})}
+	_, err := (&Assistant{core: core}).mutate(context.Background(), "stack", "media", "restart")
+	if err == nil || !strings.Contains(err.Error(), "stopped the stack but failed during start") {
+		t.Fatalf("restart error = %v, want partial failure details", err)
 	}
 }
