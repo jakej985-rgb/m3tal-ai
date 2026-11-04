@@ -42,7 +42,11 @@ func cloneInferenceWeights(src inferenceWeights) inferenceWeights {
 }
 
 func (backend *cpuInferenceBackend) Forward(tokenIDs []int) []float32 {
-	return forwardFloat32(backend.config, backend.vocab, backend.state, tokenIDs).logits
+	cache := forwardFloat32(backend.config, backend.vocab, backend.state, tokenIDs)
+	// Return only the last position's logits for generation (backward compatibility)
+	last := len(cache.ids) - 1
+	vocab := backend.vocab
+	return cache.logits[last*vocab : (last+1)*vocab]
 }
 
 func linear32(input []float32, rows, inputSize, outputSize int, layer inferenceLayer) []float32 {
@@ -70,38 +74,72 @@ func forwardFloat32(config Config, vocab int, weights inferenceWeights, tokenIDs
 	q := linear32(x, rows, width, width, weights.query)
 	k := linear32(x, rows, width, width, weights.key)
 	v := linear32(x, rows, width, width, weights.value)
-	last, scale := rows-1, float32(1/math.Sqrt(float64(width)))
-	scores := make([]float32, rows)
-	maximum := float32(math.Inf(-1))
-	for row := 0; row < rows; row++ {
-		var score float32
-		for d := 0; d < width; d++ { score += q[last*width+d] * k[row*width+d] }
-		score *= scale
-		scores[row] = score
-		if score > maximum { maximum = score }
+	
+	// Causal attention: compute scores for all positions with masking
+	scale := float32(1/math.Sqrt(float64(width)))
+	attention := make([]float32, rows*rows) // [rows, rows]
+	for i := 0; i < rows; i++ {
+		maximum := float32(math.Inf(-1))
+		for j := 0; j <= i; j++ { // causal mask: only attend to positions <= i
+			var score float32
+			for d := 0; d < width; d++ { score += q[i*width+d] * k[j*width+d] }
+			score *= scale
+			attention[i*rows+j] = score
+			if score > maximum { maximum = score }
+		}
+		// Softmax with causal mask
+		var normalizer float32
+		for j := 0; j <= i; j++ {
+			attention[i*rows+j] = float32(math.Exp(float64(attention[i*rows+j] - maximum)))
+			normalizer += attention[i*rows+j]
+		}
+		for j := 0; j <= i; j++ { attention[i*rows+j] /= normalizer }
+		// Positions > i get zero attention (already causal-masked)
 	}
-	attention := make([]float32, rows)
-	var normalizer float32
-	for row, score := range scores { attention[row] = float32(math.Exp(float64(score-maximum))); normalizer += attention[row] }
-	for row := range attention { attention[row] /= normalizer }
-	attended := make([]float32, width)
-	for row, alpha := range attention { for d := 0; d < width; d++ { attended[d] += alpha*v[row*width+d] } }
-	residual := make([]float32, width)
-	attnProjection := linear32(attended, 1, width, width, weights.attnOut)
-	for d := range residual { residual[d] = x[last*width+d] + attnProjection[d] }
-	hiddenPre := linear32(residual, 1, width, width*2, weights.ffIn)
-	hidden := make([]float32, len(hiddenPre))
+	
+	// Compute attended values for all positions
+	attended := make([]float32, rows*width)
+	for i := 0; i < rows; i++ {
+		for d := 0; d < width; d++ {
+			for j := 0; j <= i; j++ {
+				attended[i*width+d] += attention[i*rows+j] * v[j*width+d]
+			}
+		}
+	}
+	
+	// Attention output + residual for all positions
+	attnProjection := linear32(attended, rows, width, width, weights.attnOut)
+	residual := make([]float32, rows*width)
+	for i := 0; i < rows*width; i++ { residual[i] = x[i] + attnProjection[i] }
+	
+	// Feed-forward network for all positions
+	hiddenPre := linear32(residual, rows, width, width*2, weights.ffIn)
+	hidden := make([]float32, rows*width*2)
 	for i, value := range hiddenPre { hidden[i] = float32(math.Tanh(float64(value))) }
-	feedForward := linear32(hidden, 1, width*2, width, weights.ffOut)
-	encoded := make([]float32, width)
-	for d := range encoded { encoded[d] = residual[d] + feedForward[d] }
-	logits := linear32(encoded, 1, width, vocab, weights.output)
-	maxLogit := float32(math.Inf(-1))
-	for _, value := range logits { if value > maxLogit { maxLogit = value } }
-	probabilities := make([]float32, vocab)
-	var total float32
-	for i, value := range logits { probabilities[i] = float32(math.Exp(float64(value-maxLogit))); total += probabilities[i] }
-	for i := range probabilities { probabilities[i] /= total }
+	feedForward := linear32(hidden, rows, width*2, width, weights.ffOut)
+	
+	// Output projection + residual for all positions
+	encoded := make([]float32, rows*width)
+	for i := 0; i < rows*width; i++ { encoded[i] = residual[i] + feedForward[i] }
+	
+	// Logits for all positions
+	logits := linear32(encoded, rows, width, vocab, weights.output)
+	
+	// Softmax probabilities for all positions
+	probabilities := make([]float32, rows*vocab)
+	for i := 0; i < rows; i++ {
+		maxLogit := float32(math.Inf(-1))
+		for j := 0; j < vocab; j++ {
+			if logits[i*vocab+j] > maxLogit { maxLogit = logits[i*vocab+j] }
+		}
+		var total float32
+		for j := 0; j < vocab; j++ {
+			probabilities[i*vocab+j] = float32(math.Exp(float64(logits[i*vocab+j] - maxLogit)))
+			total += probabilities[i*vocab+j]
+		}
+		for j := 0; j < vocab; j++ { probabilities[i*vocab+j] /= total }
+	}
+	
 	return forwardCache{ids: ids, x: x, q: q, k: k, v: v, attention: attention, attended: attended, residual: residual, hidden: hidden, encoded: encoded, logits: logits, probabilities: probabilities}
 }
 

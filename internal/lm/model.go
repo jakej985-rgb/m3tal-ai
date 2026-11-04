@@ -104,13 +104,13 @@ func NewModel(config Config, tokenizer *Tokenizer, seed int64) (*Model, error) {
 type forwardCache struct {
 	ids       []int
 	x, q, k, v []float32
-	attention []float32
-	attended  []float32
-	residual  []float32
-	hidden    []float32
-	encoded   []float32
-	logits    []float32
-	probabilities []float32
+	attention []float32 // [rows, rows] - attention scores for causal masking
+	attended  []float32 // [rows, width] - attended values per position
+	residual  []float32 // [rows, width] - residual connections per position
+	hidden    []float32 // [rows, width*2] - hidden activations per position
+	encoded   []float32 // [rows, width] - encoded representations per position
+	logits    []float32 // [rows, vocab] - logits for all positions
+	probabilities []float32 // [rows, vocab] - softmax probabilities for all positions
 }
 
 func (m *Model) parameterView() inferenceWeights {
@@ -130,96 +130,147 @@ func (m *Model) forward(ids []int) forwardCache {
 	return forwardFloat32(m.Config, len(m.Tokenizer.Tokens), m.parameterView(), ids)
 }
 
-func (m *Model) backward(cache forwardCache, target int) {
+func (m *Model) backward(cache forwardCache, targets []int) {
 	width, vocab, rows := m.Config.Width, len(m.Tokenizer.Tokens), len(cache.ids)
-	last := rows - 1
-	gradientLogits := append([]float32(nil), cache.probabilities...)
-	gradientLogits[target] -= 1
-
-	gradientEncoded := make([]float32, width)
-	for d := 0; d < width; d++ {
-		for token := 0; token < vocab; token++ {
-			index := d*vocab + token
-			m.output.weights.gradient[index] += cache.encoded[d] * gradientLogits[token]
-			gradientEncoded[d] += m.output.weights.values[index] * gradientLogits[token]
+	
+	// Gradient for logits: softmax derivative at all positions
+	gradientLogits := make([]float32, rows*vocab)
+	for i := 0; i < rows; i++ {
+		for j := 0; j < vocab; j++ {
+			gradientLogits[i*vocab+j] = cache.probabilities[i*vocab+j]
 		}
+		gradientLogits[i*vocab+targets[i]] -= 1
 	}
-	addInPlace(m.output.bias.gradient, gradientLogits)
-
-	gradientResidual := append([]float32(nil), gradientEncoded...)
-	gradientHidden := make([]float32, width*2)
-	for h := 0; h < width*2; h++ {
+	
+	// Backprop through output layer (all positions)
+	gradientEncoded := make([]float32, rows*width)
+	for i := 0; i < rows; i++ {
 		for d := 0; d < width; d++ {
-			index := h*width + d
-			m.ffOut.weights.gradient[index] += cache.hidden[h] * gradientEncoded[d]
-			gradientHidden[h] += m.ffOut.weights.values[index] * gradientEncoded[d]
-		}
-	}
-	addInPlace(m.ffOut.bias.gradient, gradientEncoded)
-	for h := range gradientHidden { gradientHidden[h] *= 1 - cache.hidden[h]*cache.hidden[h] }
-	for d := 0; d < width; d++ {
-		for h := 0; h < width*2; h++ {
-			index := d*width*2 + h
-			m.ffIn.weights.gradient[index] += cache.residual[d] * gradientHidden[h]
-			gradientResidual[d] += m.ffIn.weights.values[index] * gradientHidden[h]
-		}
-	}
-	addInPlace(m.ffIn.bias.gradient, gradientHidden)
-
-	gradientAttended := make([]float32, width)
-	for input := 0; input < width; input++ {
-		for output := 0; output < width; output++ {
-			index := input*width + output
-			m.attnOut.weights.gradient[index] += cache.attended[input] * gradientResidual[output]
-			gradientAttended[input] += m.attnOut.weights.values[index] * gradientResidual[output]
-		}
-	}
-	addInPlace(m.attnOut.bias.gradient, gradientResidual)
-
-	gradientAttention := make([]float32, rows)
-	var weightedGradient float32
-	for row := 0; row < rows; row++ {
-		for d := 0; d < width; d++ { gradientAttention[row] += gradientAttended[d] * cache.v[row*width+d] }
-		weightedGradient += cache.attention[row] * gradientAttention[row]
-	}
-	gradientX := make([]float32, rows*width)
-	addInPlace(gradientX[last*width:(last+1)*width], gradientResidual)
-	gradientQuery := make([]float32, width)
-	gradientKeys := make([]float32, rows*width)
-	gradientValues := make([]float32, rows*width)
-	scale := float32(1 / math.Sqrt(float64(width)))
-	for row := 0; row < rows; row++ {
-		gradientScore := cache.attention[row] * (gradientAttention[row] - weightedGradient)
-		for output := 0; output < width; output++ {
-			gradientQuery[output] += gradientScore * cache.k[row*width+output] * scale
-			gradientKeys[row*width+output] = gradientScore * cache.q[last*width+output] * scale
-			gradientValues[row*width+output] = cache.attention[row] * gradientAttended[output]
-		}
-	}
-	for input := 0; input < width; input++ {
-		for output := 0; output < width; output++ {
-			index := input*width + output
-			m.query.weights.gradient[index] += cache.x[last*width+input] * gradientQuery[output]
-			gradientX[last*width+input] += m.query.weights.values[index] * gradientQuery[output]
-			for row := 0; row < rows; row++ {
-				m.key.weights.gradient[index] += cache.x[row*width+input] * gradientKeys[row*width+output]
-				m.value.weights.gradient[index] += cache.x[row*width+input] * gradientValues[row*width+output]
-				gradientX[row*width+input] += m.key.weights.values[index]*gradientKeys[row*width+output] + m.value.weights.values[index]*gradientValues[row*width+output]
+			for token := 0; token < vocab; token++ {
+				index := d*vocab + token
+				m.output.weights.gradient[index] += cache.encoded[i*width+d] * gradientLogits[i*vocab+token]
+				gradientEncoded[i*width+d] += m.output.weights.values[index] * gradientLogits[i*vocab+token]
 			}
 		}
 	}
-	addInPlace(m.query.bias.gradient, gradientQuery)
-	for row := 0; row < rows; row++ {
-		for output := 0; output < width; output++ {
-			m.key.bias.gradient[output] += gradientKeys[row*width+output]
-			m.value.bias.gradient[output] += gradientValues[row*width+output]
+	for i := 0; i < rows; i++ {
+		for j := 0; j < vocab; j++ {
+			m.output.bias.gradient[j] += gradientLogits[i*vocab+j]
 		}
 	}
+	
+	// Backprop through feed-forward network (all positions)
+	gradientResidual := make([]float32, rows*width)
+	copy(gradientResidual, gradientEncoded)
+	gradientHidden := make([]float32, rows*width*2)
+	for i := 0; i < rows; i++ {
+		for h := 0; h < width*2; h++ {
+			for d := 0; d < width; d++ {
+				index := h*width + d
+				m.ffOut.weights.gradient[index] += cache.hidden[i*width*2+h] * gradientEncoded[i*width+d]
+				gradientHidden[i*width*2+h] += m.ffOut.weights.values[index] * gradientEncoded[i*width+d]
+			}
+		}
+	}
+	for i := 0; i < rows; i++ {
+		for h := 0; h < width*2; h++ {
+			m.ffIn.bias.gradient[h] += gradientHidden[i*width*2+h]
+		}
+	}
+	for i := 0; i < rows; i++ {
+		for h := 0; h < width*2; h++ {
+			gradientHidden[i*width*2+h] *= 1 - cache.hidden[i*width*2+h]*cache.hidden[i*width*2+h]
+		}
+		for d := 0; d < width; d++ {
+			for h := 0; h < width*2; h++ {
+				index := d*width*2 + h
+				m.ffIn.weights.gradient[index] += cache.residual[i*width+d] * gradientHidden[i*width*2+h]
+				gradientResidual[i*width+d] += m.ffIn.weights.values[index] * gradientHidden[i*width*2+h]
+			}
+		}
+	}
+	
+	// Backprop through attention (all positions)
+	gradientAttended := make([]float32, rows*width)
+	for i := 0; i < rows; i++ {
+		for input := 0; input < width; input++ {
+			for output := 0; output < width; output++ {
+				index := input*width + output
+				m.attnOut.weights.gradient[index] += cache.attended[i*width+input] * gradientResidual[i*width+output]
+				gradientAttended[i*width+input] += m.attnOut.weights.values[index] * gradientResidual[i*width+output]
+			}
+		}
+	}
+	for i := 0; i < rows; i++ {
+		for output := 0; output < width; output++ {
+			m.attnOut.bias.gradient[output] += gradientResidual[i*width+output]
+		}
+	}
+	
+	// Backprop through attention weights (causal)
+	gradientAttention := make([]float32, rows*rows)
+	for i := 0; i < rows; i++ {
+		for d := 0; d < width; d++ {
+			for j := 0; j <= i; j++ {
+				gradientAttention[i*rows+j] += gradientAttended[i*width+d] * cache.v[j*width+d]
+			}
+		}
+	}
+	
+	gradientX := make([]float32, rows*width)
+	gradientQuery := make([]float32, rows*width)
+	gradientKeys := make([]float32, rows*width)
+	gradientValues := make([]float32, rows*width)
+	scale := float32(1 / math.Sqrt(float64(width)))
+	
+	for i := 0; i < rows; i++ {
+		// Compute attention gradient contribution
+		var weightedGradient float32
+		for j := 0; j <= i; j++ {
+			weightedGradient += cache.attention[i*rows+j] * gradientAttention[i*rows+j]
+		}
+		
+		for j := 0; j <= i; j++ {
+			gradientScore := cache.attention[i*rows+j] * (gradientAttention[i*rows+j] - weightedGradient)
+			for output := 0; output < width; output++ {
+				gradientQuery[i*width+output] += gradientScore * cache.k[j*width+output] * scale
+				gradientKeys[j*width+output] += gradientScore * cache.q[i*width+output] * scale
+				gradientValues[j*width+output] += cache.attention[i*rows+j] * gradientAttended[i*width+output]
+			}
+		}
+	}
+	
+	// Backprop through QKV projections
+	for input := 0; input < width; input++ {
+		for output := 0; output < width; output++ {
+			index := input*width + output
+			for i := 0; i < rows; i++ {
+				m.query.weights.gradient[index] += cache.x[i*width+input] * gradientQuery[i*width+output]
+				gradientX[i*width+input] += m.query.weights.values[index] * gradientQuery[i*width+output]
+				m.key.weights.gradient[index] += cache.x[i*width+input] * gradientKeys[i*width+output]
+				gradientX[i*width+input] += m.key.weights.values[index] * gradientKeys[i*width+output]
+				m.value.weights.gradient[index] += cache.x[i*width+input] * gradientValues[i*width+output]
+				gradientX[i*width+input] += m.value.weights.values[index] * gradientValues[i*width+output]
+			}
+		}
+	}
+	
+	// Bias gradients
+	for i := 0; i < rows; i++ {
+		for output := 0; output < width; output++ {
+			m.query.bias.gradient[output] += gradientQuery[i*width+output]
+			m.key.bias.gradient[output] += gradientKeys[i*width+output]
+			m.value.bias.gradient[output] += gradientValues[i*width+output]
+		}
+	}
+	
+	// Backprop through embeddings
 	for row, id := range cache.ids {
 		for d := 0; d < width; d++ {
-			index := id*width + d
-			m.tokenEmb.gradient[index] += gradientX[row*width+d]
-			m.posEmb.gradient[row*width+d] += gradientX[row*width+d]
+			tokenIndex := id*width + d
+			posIndex := row*width + d
+			m.tokenEmb.gradient[tokenIndex] += gradientX[row*width+d]
+			m.posEmb.gradient[posIndex] += gradientX[row*width+d]
 		}
 	}
 }
@@ -251,7 +302,17 @@ func tokenLoss32(logits []float32, target int) float64 {
 	return math.Log(total) + float64(maximum) - float64(logits[target])
 }
 
-// Train performs next-token training with float32 parameters and Adam updates.
+// Mean window loss: average cross-entropy over all positions
+func meanWindowLoss(cache forwardCache, targets []int) float64 {
+	totalLoss := 0.0
+	for i := range targets {
+		rowLogits := cache.logits[i*len(cache.probabilities)/len(targets) : (i+1)*len(cache.probabilities)/len(targets)]
+		totalLoss += tokenLoss32(rowLogits, targets[i])
+	}
+	return totalLoss / float64(len(targets))
+}
+
+// Train performs causal full-window training with float32 parameters and Adam updates.
 // It returns average pre-update cross-entropy per epoch.
 func (m *Model) Train(texts []string, epochs, stepsPerEpoch int, learningRate float64) ([]float64, error) {
 	if epochs <= 0 || stepsPerEpoch <= 0 || learningRate <= 0 || math.IsNaN(learningRate) || math.IsInf(learningRate, 0) { return nil, fmt.Errorf("epochs, steps, and finite positive learning rate are required") }
@@ -270,10 +331,10 @@ func (m *Model) Train(texts []string, epochs, stepsPerEpoch int, learningRate fl
 			window := ids[start:end]
 			if len(window) < 2 { continue }
 			cache := m.forward(window[:len(window)-1])
-			target := window[len(window)-1]
-			totalLoss += tokenLoss32(cache.logits, target)
+			targets := window[1:]
+			totalLoss += meanWindowLoss(cache, targets)
 			zeroGradients(m.parameters)
-			m.backward(cache, target)
+			m.backward(cache, targets)
 			m.adamStep(float32(learningRate))
 		}
 		losses = append(losses, totalLoss/float64(stepsPerEpoch))
