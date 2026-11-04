@@ -10,14 +10,26 @@ import (
 	"strings"
 )
 
-// Config defines the small one-block, one-head decoder-only Transformer.
+// Config defines the multi-layer, multi-head decoder-only Transformer.
 type Config struct {
 	Context int `json:"context"`
 	Width   int `json:"width"`
+	Layers  int `json:"layers,omitempty"`
+	Heads   int `json:"heads,omitempty"`
+}
+
+// Normalize ensures Layers and Heads have valid defaults.
+func (c *Config) Normalize() {
+	if c.Layers <= 0 {
+		c.Layers = 1
+	}
+	if c.Heads <= 0 {
+		c.Heads = 1
+	}
 }
 
 // DefaultConfig fits an instruction-capable training prototype on CPU-only machines.
-func DefaultConfig() Config { return Config{Context: 128, Width: 32} }
+func DefaultConfig() Config { return Config{Context: 128, Width: 32, Layers: 2, Heads: 2} }
 
 // parameter owns contiguous float32 values, gradients, and Adam state.
 type parameter struct {
@@ -34,24 +46,26 @@ type linear struct {
 	output  int
 }
 
-// Model is a small causal language model trained and run with contiguous
-// float32 parameters. Training uses explicit backpropagation for its fixed
-// one-block architecture.
+type transformerBlock struct {
+	query   linear
+	key     linear
+	value   linear
+	attnOut linear
+	ffIn    linear
+	ffOut   linear
+}
+
+// Model is a causal language model trained and run with contiguous float32 parameters.
 type Model struct {
-	Config    Config
-	Tokenizer *Tokenizer
-	tokenEmb  *parameter // [vocabulary, width]
-	posEmb    *parameter // [context, width]
-	query     linear
-	key       linear
-	value     linear
-	attnOut   linear
-	ffIn      linear
-	ffOut     linear
-	output    linear
+	Config     Config
+	Tokenizer  *Tokenizer
+	tokenEmb   *parameter // [vocabulary, width]
+	posEmb     *parameter // [context, width]
+	blocks     []transformerBlock
+	output     linear
 	parameters []*parameter
-	step      int
-	backend   inferenceBackend
+	step       int
+	backend    inferenceBackend
 }
 
 // ParameterCount reports the number of trainable scalar weights.
@@ -72,8 +86,15 @@ func (m *Model) addParameter(parameter *parameter) *parameter {
 
 // NewModel initializes weights with a deterministic seed.
 func NewModel(config Config, tokenizer *Tokenizer, seed int64) (*Model, error) {
+	config.Normalize()
 	if config.Context < 2 || config.Context > 512 || config.Width < 2 || config.Width > 128 || tokenizer == nil || len(tokenizer.Tokens) < 256 || len(tokenizer.Tokens) > 4096 {
 		return nil, fmt.Errorf("invalid model config or tokenizer")
+	}
+	if config.Layers < 1 || config.Layers > 8 {
+		return nil, fmt.Errorf("layers must be between 1 and 8")
+	}
+	if config.Heads < 1 || config.Heads > 16 || config.Width%config.Heads != 0 {
+		return nil, fmt.Errorf("width %d must be divisible by heads %d", config.Width, config.Heads)
 	}
 	rng := rand.New(rand.NewSource(seed))
 	m := &Model{Config: config, Tokenizer: tokenizer}
@@ -91,38 +112,39 @@ func NewModel(config Config, tokenizer *Tokenizer, seed int64) (*Model, error) {
 	width, vocab := config.Width, len(tokenizer.Tokens)
 	m.tokenEmb = newMatrix(vocab, width)
 	m.posEmb = newMatrix(config.Context, width)
-	m.query = newLinear(width, width)
-	m.key = newLinear(width, width)
-	m.value = newLinear(width, width)
-	m.attnOut = newLinear(width, width)
-	m.ffIn = newLinear(width, width*2)
-	m.ffOut = newLinear(width*2, width)
+	m.blocks = make([]transformerBlock, config.Layers)
+	for l := 0; l < config.Layers; l++ {
+		m.blocks[l] = transformerBlock{
+			query:   newLinear(width, width),
+			key:     newLinear(width, width),
+			value:   newLinear(width, width),
+			attnOut: newLinear(width, width),
+			ffIn:    newLinear(width, width*2),
+			ffOut:   newLinear(width*2, width),
+		}
+	}
 	m.output = newLinear(width, vocab)
 	return m, nil
 }
 
-type forwardCache struct {
-	ids       []int
-	x, q, k, v []float32
-	attention []float32 // [rows, rows] - attention scores for causal masking
-	attended  []float32 // [rows, width] - attended values per position
-	residual  []float32 // [rows, width] - residual connections per position
-	hidden    []float32 // [rows, width*2] - hidden activations per position
-	encoded   []float32 // [rows, width] - encoded representations per position
-	logits    []float32 // [rows, vocab] - logits for all positions
-	probabilities []float32 // [rows, vocab] - softmax probabilities for all positions
-}
-
 func (m *Model) parameterView() inferenceWeights {
+	m.Config.Normalize()
+	blocks := make([]inferenceBlock, len(m.blocks))
+	for i, b := range m.blocks {
+		blocks[i] = inferenceBlock{
+			query:   inferenceLayer{weights: b.query.weights.values, bias: b.query.bias.values},
+			key:     inferenceLayer{weights: b.key.weights.values, bias: b.key.bias.values},
+			value:   inferenceLayer{weights: b.value.weights.values, bias: b.value.bias.values},
+			attnOut: inferenceLayer{weights: b.attnOut.weights.values, bias: b.attnOut.bias.values},
+			ffIn:    inferenceLayer{weights: b.ffIn.weights.values, bias: b.ffIn.bias.values},
+			ffOut:   inferenceLayer{weights: b.ffOut.weights.values, bias: b.ffOut.bias.values},
+		}
+	}
 	return inferenceWeights{
-		tokenEmb: m.tokenEmb.values, posEmb: m.posEmb.values,
-		query: inferenceLayer{weights: m.query.weights.values, bias: m.query.bias.values},
-		key: inferenceLayer{weights: m.key.weights.values, bias: m.key.bias.values},
-		value: inferenceLayer{weights: m.value.weights.values, bias: m.value.bias.values},
-		attnOut: inferenceLayer{weights: m.attnOut.weights.values, bias: m.attnOut.bias.values},
-		ffIn: inferenceLayer{weights: m.ffIn.weights.values, bias: m.ffIn.bias.values},
-		ffOut: inferenceLayer{weights: m.ffOut.weights.values, bias: m.ffOut.bias.values},
-		output: inferenceLayer{weights: m.output.weights.values, bias: m.output.bias.values},
+		tokenEmb: m.tokenEmb.values,
+		posEmb:   m.posEmb.values,
+		blocks:   blocks,
+		output:   inferenceLayer{weights: m.output.weights.values, bias: m.output.bias.values},
 	}
 }
 
@@ -131,7 +153,12 @@ func (m *Model) forward(ids []int) forwardCache {
 }
 
 func (m *Model) backward(cache forwardCache, targets []int, mask []bool) {
+	m.Config.Normalize()
 	width, vocab, rows := m.Config.Width, len(m.Tokenizer.Tokens), len(cache.ids)
+	heads := m.Config.Heads
+	headDim := width / heads
+	scale := float32(1.0 / math.Sqrt(float64(headDim)))
+
 	activeCount := rows
 	if mask != nil {
 		activeCount = 0
@@ -145,8 +172,8 @@ func (m *Model) backward(cache forwardCache, targets []int, mask []bool) {
 		}
 	}
 	invRows := float32(1.0 / float64(activeCount))
-	
-	// Gradient for logits: softmax derivative at active positions
+
+	// 1. Logits layer gradient: softmax derivative at active positions
 	gradientLogits := make([]float32, rows*vocab)
 	for i := 0; i < rows; i++ {
 		if mask != nil && (i >= len(mask) || !mask[i]) {
@@ -157,15 +184,16 @@ func (m *Model) backward(cache forwardCache, targets []int, mask []bool) {
 		}
 		gradientLogits[i*vocab+targets[i]] -= invRows
 	}
-	
-	// Backprop through output layer (all positions)
-	gradientEncoded := make([]float32, rows*width)
+
+	// 2. Output linear layer backprop
+	lastBlockIdx := len(m.blocks) - 1
+	gradientCurrentX := make([]float32, rows*width)
 	for i := 0; i < rows; i++ {
 		for d := 0; d < width; d++ {
 			for token := 0; token < vocab; token++ {
 				index := d*vocab + token
-				m.output.weights.gradient[index] += cache.encoded[i*width+d] * gradientLogits[i*vocab+token]
-				gradientEncoded[i*width+d] += m.output.weights.values[index] * gradientLogits[i*vocab+token]
+				m.output.weights.gradient[index] += cache.blocks[lastBlockIdx].encoded[i*width+d] * gradientLogits[i*vocab+token]
+				gradientCurrentX[i*width+d] += m.output.weights.values[index] * gradientLogits[i*vocab+token]
 			}
 		}
 	}
@@ -174,123 +202,136 @@ func (m *Model) backward(cache forwardCache, targets []int, mask []bool) {
 			m.output.bias.gradient[j] += gradientLogits[i*vocab+j]
 		}
 	}
-	
-	// Backprop through feed-forward network (all positions)
-	gradientResidual := make([]float32, rows*width)
-	copy(gradientResidual, gradientEncoded)
-	gradientHidden := make([]float32, rows*width*2)
-	for i := 0; i < rows; i++ {
-		for h := 0; h < width*2; h++ {
-			for d := 0; d < width; d++ {
-				index := h*width + d
-				m.ffOut.weights.gradient[index] += cache.hidden[i*width*2+h] * gradientEncoded[i*width+d]
-				gradientHidden[i*width*2+h] += m.ffOut.weights.values[index] * gradientEncoded[i*width+d]
-			}
-		}
-	}
-	for i := 0; i < rows; i++ {
-		for d := 0; d < width; d++ {
-			m.ffOut.bias.gradient[d] += gradientEncoded[i*width+d]
-		}
-	}
-	for i := 0; i < rows; i++ {
-		for h := 0; h < width*2; h++ {
-			gradientHidden[i*width*2+h] *= 1 - cache.hidden[i*width*2+h]*cache.hidden[i*width*2+h]
-		}
-		for h := 0; h < width*2; h++ {
-			m.ffIn.bias.gradient[h] += gradientHidden[i*width*2+h]
-		}
-		for d := 0; d < width; d++ {
+
+	// 3. Backprop through transformer blocks in reverse order
+	for l := len(m.blocks) - 1; l >= 0; l-- {
+		block := m.blocks[l]
+		bcache := cache.blocks[l]
+		gradientEncoded := gradientCurrentX
+
+		// Backprop through FF network
+		gradientResidual := make([]float32, rows*width)
+		copy(gradientResidual, gradientEncoded)
+		gradientHidden := make([]float32, rows*width*2)
+
+		for i := 0; i < rows; i++ {
 			for h := 0; h < width*2; h++ {
-				index := d*width*2 + h
-				m.ffIn.weights.gradient[index] += cache.residual[i*width+d] * gradientHidden[i*width*2+h]
-				gradientResidual[i*width+d] += m.ffIn.weights.values[index] * gradientHidden[i*width*2+h]
+				for d := 0; d < width; d++ {
+					index := h*width + d
+					block.ffOut.weights.gradient[index] += bcache.hidden[i*width*2+h] * gradientEncoded[i*width+d]
+					gradientHidden[i*width*2+h] += block.ffOut.weights.values[index] * gradientEncoded[i*width+d]
+				}
 			}
 		}
-	}
-	
-	// Backprop through attention projection (all positions)
-	gradientAttended := make([]float32, rows*width)
-	for i := 0; i < rows; i++ {
+		for i := 0; i < rows; i++ {
+			for d := 0; d < width; d++ {
+				block.ffOut.bias.gradient[d] += gradientEncoded[i*width+d]
+			}
+		}
+
+		for i := 0; i < rows; i++ {
+			for h := 0; h < width*2; h++ {
+				gradientHidden[i*width*2+h] *= 1 - bcache.hidden[i*width*2+h]*bcache.hidden[i*width*2+h]
+			}
+			for h := 0; h < width*2; h++ {
+				block.ffIn.bias.gradient[h] += gradientHidden[i*width*2+h]
+			}
+			for d := 0; d < width; d++ {
+				for h := 0; h < width*2; h++ {
+					index := d*width*2 + h
+					block.ffIn.weights.gradient[index] += bcache.residual[i*width+d] * gradientHidden[i*width*2+h]
+					gradientResidual[i*width+d] += block.ffIn.weights.values[index] * gradientHidden[i*width*2+h]
+				}
+			}
+		}
+
+		// Backprop through attention output projection
+		gradientAttended := make([]float32, rows*width)
+		for i := 0; i < rows; i++ {
+			for input := 0; input < width; input++ {
+				for output := 0; output < width; output++ {
+					index := input*width + output
+					block.attnOut.weights.gradient[index] += bcache.attended[i*width+input] * gradientResidual[i*width+output]
+					gradientAttended[i*width+input] += block.attnOut.weights.values[index] * gradientResidual[i*width+output]
+				}
+			}
+		}
+		for i := 0; i < rows; i++ {
+			for output := 0; output < width; output++ {
+				block.attnOut.bias.gradient[output] += gradientResidual[i*width+output]
+			}
+		}
+
+		// Backprop through multi-head causal attention
+		gradientX := make([]float32, rows*width)
+		copy(gradientX, gradientResidual)
+		gradientQuery := make([]float32, rows*width)
+		gradientKeys := make([]float32, rows*width)
+		gradientValues := make([]float32, rows*width)
+
+		gradientAttention := make([]float32, heads*rows*rows)
+		for h := 0; h < heads; h++ {
+			headOffset := h * headDim
+			headMatrixOffset := h * rows * rows
+			for i := 0; i < rows; i++ {
+				for d := 0; d < headDim; d++ {
+					for j := 0; j <= i; j++ {
+						gradientAttention[headMatrixOffset+i*rows+j] += gradientAttended[i*width+headOffset+d] * bcache.v[j*width+headOffset+d]
+					}
+				}
+			}
+		}
+
+		for h := 0; h < heads; h++ {
+			headOffset := h * headDim
+			headMatrixOffset := h * rows * rows
+			for i := 0; i < rows; i++ {
+				var weightedGradient float32
+				for j := 0; j <= i; j++ {
+					weightedGradient += bcache.attention[headMatrixOffset+i*rows+j] * gradientAttention[headMatrixOffset+i*rows+j]
+				}
+				for j := 0; j <= i; j++ {
+					gradientScore := bcache.attention[headMatrixOffset+i*rows+j] * (gradientAttention[headMatrixOffset+i*rows+j] - weightedGradient)
+					for d := 0; d < headDim; d++ {
+						gradientQuery[i*width+headOffset+d] += gradientScore * bcache.k[j*width+headOffset+d] * scale
+						gradientKeys[j*width+headOffset+d] += gradientScore * bcache.q[i*width+headOffset+d] * scale
+						gradientValues[j*width+headOffset+d] += bcache.attention[headMatrixOffset+i*rows+j] * gradientAttended[i*width+headOffset+d]
+					}
+				}
+			}
+		}
+
+		// Backprop through QKV linear projections
 		for input := 0; input < width; input++ {
 			for output := 0; output < width; output++ {
 				index := input*width + output
-				m.attnOut.weights.gradient[index] += cache.attended[i*width+input] * gradientResidual[i*width+output]
-				gradientAttended[i*width+input] += m.attnOut.weights.values[index] * gradientResidual[i*width+output]
+				for i := 0; i < rows; i++ {
+					block.query.weights.gradient[index] += bcache.x[i*width+input] * gradientQuery[i*width+output]
+					gradientX[i*width+input] += block.query.weights.values[index] * gradientQuery[i*width+output]
+					block.key.weights.gradient[index] += bcache.x[i*width+input] * gradientKeys[i*width+output]
+					gradientX[i*width+input] += block.key.weights.values[index] * gradientKeys[i*width+output]
+					block.value.weights.gradient[index] += bcache.x[i*width+input] * gradientValues[i*width+output]
+					gradientX[i*width+input] += block.value.weights.values[index] * gradientValues[i*width+output]
+				}
 			}
 		}
-	}
-	for i := 0; i < rows; i++ {
-		for output := 0; output < width; output++ {
-			m.attnOut.bias.gradient[output] += gradientResidual[i*width+output]
-		}
-	}
-	
-	// Backprop through attention weights (causal)
-	gradientAttention := make([]float32, rows*rows)
-	for i := 0; i < rows; i++ {
-		for d := 0; d < width; d++ {
-			for j := 0; j <= i; j++ {
-				gradientAttention[i*rows+j] += gradientAttended[i*width+d] * cache.v[j*width+d]
-			}
-		}
-	}
-	
-	gradientX := make([]float32, rows*width)
-	copy(gradientX, gradientResidual)
-	gradientQuery := make([]float32, rows*width)
-	gradientKeys := make([]float32, rows*width)
-	gradientValues := make([]float32, rows*width)
-	scale := float32(1 / math.Sqrt(float64(width)))
-	
-	for i := 0; i < rows; i++ {
-		// Compute attention gradient contribution
-		var weightedGradient float32
-		for j := 0; j <= i; j++ {
-			weightedGradient += cache.attention[i*rows+j] * gradientAttention[i*rows+j]
-		}
-		
-		for j := 0; j <= i; j++ {
-			gradientScore := cache.attention[i*rows+j] * (gradientAttention[i*rows+j] - weightedGradient)
+		for i := 0; i < rows; i++ {
 			for output := 0; output < width; output++ {
-				gradientQuery[i*width+output] += gradientScore * cache.k[j*width+output] * scale
-				gradientKeys[j*width+output] += gradientScore * cache.q[i*width+output] * scale
-				gradientValues[j*width+output] += cache.attention[i*rows+j] * gradientAttended[i*width+output]
+				block.query.bias.gradient[output] += gradientQuery[i*width+output]
+				block.key.bias.gradient[output] += gradientKeys[i*width+output]
+				block.value.bias.gradient[output] += gradientValues[i*width+output]
 			}
 		}
+
+		// gradientX flows into preceding layer
+		gradientCurrentX = gradientX
 	}
-	
-	// Backprop through QKV projections
-	for input := 0; input < width; input++ {
-		for output := 0; output < width; output++ {
-			index := input*width + output
-			for i := 0; i < rows; i++ {
-				m.query.weights.gradient[index] += cache.x[i*width+input] * gradientQuery[i*width+output]
-				gradientX[i*width+input] += m.query.weights.values[index] * gradientQuery[i*width+output]
-				m.key.weights.gradient[index] += cache.x[i*width+input] * gradientKeys[i*width+output]
-				gradientX[i*width+input] += m.key.weights.values[index] * gradientKeys[i*width+output]
-				m.value.weights.gradient[index] += cache.x[i*width+input] * gradientValues[i*width+output]
-				gradientX[i*width+input] += m.value.weights.values[index] * gradientValues[i*width+output]
-			}
-		}
-	}
-	
-	// Bias gradients
-	for i := 0; i < rows; i++ {
-		for output := 0; output < width; output++ {
-			m.query.bias.gradient[output] += gradientQuery[i*width+output]
-			m.key.bias.gradient[output] += gradientKeys[i*width+output]
-			m.value.bias.gradient[output] += gradientValues[i*width+output]
-		}
-	}
-	
-	// Backprop through embeddings
+
+	// 4. Backprop into token and position embeddings from block 0
 	for row, id := range cache.ids {
 		for d := 0; d < width; d++ {
-			tokenIndex := id*width + d
-			posIndex := row*width + d
-			m.tokenEmb.gradient[tokenIndex] += gradientX[row*width+d]
-			m.posEmb.gradient[posIndex] += gradientX[row*width+d]
+			m.tokenEmb.gradient[id*width+d] += gradientCurrentX[row*width+d]
+			m.posEmb.gradient[row*width+d] += gradientCurrentX[row*width+d]
 		}
 	}
 }

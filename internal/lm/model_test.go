@@ -258,6 +258,78 @@ func TestLoadCorpusSkipsSymlinksAndSensitiveFiles(t *testing.T) {
 	}
 }
 
+func TestMultiLayerMultiHeadGradientsMatchFiniteDifferences(t *testing.T) {
+	tokenizer, err := TrainTokenizer([]string{"multi layer multi head gradient check café"}, 256)
+	if err != nil {
+		t.Fatal(err)
+	}
+	model, err := NewModel(Config{Context: 6, Width: 4, Layers: 2, Heads: 2}, tokenizer, 43)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := tokenizer.Encode("grad")
+	if len(ids) < 3 {
+		t.Fatal("expected prompt to encode to at least three tokens")
+	}
+	input := ids[:len(ids)-1]
+	targets := ids[1:]
+	zeroGradients(model.parameters)
+	model.backward(model.forward(input), targets, nil)
+
+	const epsilon float32 = 1e-3
+	for parameterIndex, parameter := range model.parameters {
+		for i, analytic := range parameter.gradient {
+			original := parameter.values[i]
+			parameter.values[i] = original + epsilon
+			plus := meanWindowLoss(model.forward(input), targets, nil)
+			parameter.values[i] = original - epsilon
+			minus := meanWindowLoss(model.forward(input), targets, nil)
+			parameter.values[i] = original
+			numerical := (plus - minus) / (2 * float64(epsilon))
+			difference := math.Abs(float64(analytic) - numerical)
+			scale := math.Max(1, math.Max(math.Abs(float64(analytic)), math.Abs(numerical)))
+			if difference > 5e-2 && difference/scale > 5e-2 {
+				t.Fatalf("layer parameter %d[%d] analytic=%g finite-difference=%g diff=%g", parameterIndex, i, analytic, numerical, difference)
+			}
+		}
+	}
+}
+
+func TestMultiLayerMultiHeadCheckpointRoundTrip(t *testing.T) {
+	text := "the quick brown fox jumps over the lazy dog. café 東京 🤖 "
+	tokenizer, err := TrainTokenizer([]string{text + text}, 280)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := Config{Context: 8, Width: 4, Layers: 2, Heads: 2}
+	model, err := NewModel(cfg, tokenizer, 13)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := model.Generate("the quick", 12, 0.8, 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := t.TempDir() + "/model_multi.json"
+	if err := model.SaveCheckpoint(path); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := LoadCheckpoint(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Config.Layers != 2 || loaded.Config.Heads != 2 {
+		t.Fatalf("loaded config mismatch: layers=%d heads=%d", loaded.Config.Layers, loaded.Config.Heads)
+	}
+	after, err := loaded.Generate("the quick", 12, 0.8, 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before != after {
+		t.Fatalf("generation changed after checkpoint round trip: %q != %q", before, after)
+	}
+}
+
 func BenchmarkGenerate10Tokens(b *testing.B) {
 	tokenizer, err := TrainTokenizer([]string{"benchmark corpus text repeated benchmark corpus text"}, 256)
 	if err != nil {

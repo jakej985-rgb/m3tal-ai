@@ -24,6 +24,8 @@ func TestLMCommands(t *testing.T) {
 		"--steps", "5",
 		"--context", "16",
 		"--width", "8",
+		"--layers", "2",
+		"--heads", "2",
 		"--vocab", "260",
 		"--include-instructions",
 	}

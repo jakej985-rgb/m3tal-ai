@@ -103,3 +103,43 @@ func TestTrainInstructionsLowersLoss(t *testing.T) {
 		t.Fatalf("instruction training did not lower loss: epoch 1 = %.4f, epoch 3 = %.4f", losses[0], losses[2])
 	}
 }
+
+func TestTrainInstructionsGeneratesValidPlan(t *testing.T) {
+	examples := DefaultInstructionSet()
+	passages := FormatInstructionCorpus(examples)
+	tokenizer, err := TrainTokenizer(passages, 320)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	model, err := NewModel(Config{Context: 256, Width: 16, Layers: 2, Heads: 2}, tokenizer, 42)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	prompt := PlanPrompt("show stats and health")
+	promptIDs := tokenizer.Encode(prompt)
+	if len(promptIDs) > model.Config.Context {
+		t.Fatalf("prompt has %d tokens, exceeding context %d", len(promptIDs), model.Config.Context)
+	}
+
+	epochs, steps := 2, 10
+	if !testing.Short() {
+		epochs, steps = 3, 20
+	}
+	losses, err := model.TrainInstructions(examples, epochs, steps, 0.005)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if losses[len(losses)-1] >= losses[0] {
+		t.Fatalf("losses did not decrease: %v", losses)
+	}
+
+	out, err := model.Generate(prompt, 20, 0.2, 42)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out) == 0 {
+		t.Fatal("expected non-empty generated output")
+	}
+}

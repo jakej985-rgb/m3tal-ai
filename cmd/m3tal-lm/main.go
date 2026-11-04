@@ -34,6 +34,8 @@ func run(args []string) error {
 		vocab := flags.Int("vocab", 320, "BPE tokenizer vocabulary size")
 		contextLength := flags.Int("context", 32, "maximum context tokens")
 		width := flags.Int("width", 16, "model width")
+		layers := flags.Int("layers", 1, "number of transformer layers (1-8)")
+		heads := flags.Int("heads", 1, "number of attention heads (must divide width)")
 		seed := flags.Int64("seed", 17, "deterministic initialization seed")
 		learningRate := flags.Float64("learning-rate", 0.001, "Adam learning rate")
 		if err := flags.Parse(args[1:]); err != nil {
@@ -53,7 +55,12 @@ func run(args []string) error {
 		if err != nil {
 			return err
 		}
-		model, err := lm.NewModel(lm.Config{Context: *contextLength, Width: *width}, tokenizer, *seed)
+		model, err := lm.NewModel(lm.Config{
+			Context: *contextLength,
+			Width:   *width,
+			Layers:  *layers,
+			Heads:   *heads,
+		}, tokenizer, *seed)
 		if err != nil {
 			return err
 		}
