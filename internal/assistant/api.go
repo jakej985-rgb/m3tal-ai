@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -28,6 +29,10 @@ func NewCoreAPI(baseURL, token string) *CoreAPI {
 }
 
 func (api *CoreAPI) request(ctx context.Context, method, path string) (json.RawMessage, error) {
+	parsedURL, err := validateAPIURL(api.BaseURL)
+	if err != nil {
+		return nil, err
+	}
 	req, err := http.NewRequestWithContext(ctx, method, api.BaseURL+path, bytes.NewReader(nil))
 	if err != nil {
 		return nil, err
@@ -38,7 +43,7 @@ func (api *CoreAPI) request(ctx context.Context, method, path string) (json.RawM
 	}
 	response, err := api.Client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("connect to M3TAL Core at %s: %w", api.BaseURL, err)
+		return nil, fmt.Errorf("M3TAL Core request to %s failed: %s", sanitizedURL(parsedURL), api.sanitize(err.Error()))
 	}
 	defer response.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(response.Body, 8*1024*1024))
@@ -58,7 +63,7 @@ func (api *CoreAPI) request(ctx context.Context, method, path string) (json.RawM
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 || envelope.Status == "error" || envelope.Error != nil {
 		if envelope.Error != nil {
-			return nil, fmt.Errorf("M3TAL Core error (%s): %s", envelope.Error.Code, envelope.Error.Message)
+			return nil, fmt.Errorf("M3TAL Core error (%s): %s", api.sanitize(envelope.Error.Code), api.sanitize(envelope.Error.Message))
 		}
 		return nil, fmt.Errorf("M3TAL Core returned HTTP %d", response.StatusCode)
 	}
@@ -66,6 +71,43 @@ func (api *CoreAPI) request(ctx context.Context, method, path string) (json.RawM
 		return envelope.Data, nil
 	}
 	return json.RawMessage(body), nil
+}
+
+func validateAPIURL(raw string) (*url.URL, error) {
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Hostname() == "" {
+		return nil, fmt.Errorf("M3TAL_API_URL must be an absolute HTTP or HTTPS URL")
+	}
+	if parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return nil, fmt.Errorf("M3TAL_API_URL cannot contain credentials, query parameters, or a fragment; pass the API token with M3TAL_API_TOKEN")
+	}
+	switch parsed.Scheme {
+	case "https":
+	case "http":
+		host := strings.TrimSuffix(strings.ToLower(parsed.Hostname()), ".")
+		ip := net.ParseIP(host)
+		if host != "localhost" && (ip == nil || !ip.IsLoopback()) {
+			return nil, fmt.Errorf("refusing non-TLS remote M3TAL_API_URL; use HTTPS (plain HTTP is allowed only for localhost or loopback)")
+		}
+	default:
+		return nil, fmt.Errorf("M3TAL_API_URL scheme must be HTTP or HTTPS")
+	}
+	return parsed, nil
+}
+
+func sanitizedURL(parsed *url.URL) string {
+	copyURL := *parsed
+	copyURL.User = nil
+	copyURL.RawQuery = ""
+	copyURL.Fragment = ""
+	return copyURL.String()
+}
+
+func (api *CoreAPI) sanitize(message string) string {
+	if api.Token != "" {
+		message = strings.ReplaceAll(message, api.Token, "[REDACTED]")
+	}
+	return message
 }
 
 func (api *CoreAPI) get(ctx context.Context, path string) (json.RawMessage, error) {
