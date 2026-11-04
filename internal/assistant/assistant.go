@@ -35,6 +35,9 @@ type namedTarget struct {
 // SetLanguageModel enables local model answers and constrained plan proposals.
 func (assistant *Assistant) SetLanguageModel(model Generator) { assistant.languageModel = model }
 
+// HasLanguageModel returns true if a local model is loaded.
+func (assistant *Assistant) HasLanguageModel() bool { return assistant.languageModel != nil }
+
 // SetJSONOutput prints Core payloads as indented JSON instead of labeled fields.
 func (assistant *Assistant) SetJSONOutput(enabled bool) { assistant.jsonOutput = enabled }
 

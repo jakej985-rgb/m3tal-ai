@@ -15,6 +15,17 @@ func TestVersionFlag(t *testing.T) {
 	}
 }
 
+func TestEvalFlag(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Setenv("M3TAL_DOCS_PATHS", tempDir)
+	if err := run([]string{"--eval"}); err != nil {
+		t.Fatalf("run --eval failed: %v", err)
+	}
+	if err := run([]string{"--eval", "--json"}); err != nil {
+		t.Fatalf("run --eval --json failed: %v", err)
+	}
+}
+
 func TestConfirmationMustMatchExactActionAndTarget(t *testing.T) {
 	expected := "confirm restart stack media"
 	for _, test := range []struct {

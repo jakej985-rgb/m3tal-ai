@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -28,6 +29,7 @@ func run(arguments []string) error {
 	interactive := flags.Bool("interactive", false, "run an interactive assistant session")
 	jsonOutput := flags.Bool("json", false, "print Core payloads as JSON")
 	showVersion := flags.Bool("version", false, "print version and exit")
+	runEval := flags.Bool("eval", false, "run retrieval and RAG evaluation on built-in question set")
 	if err := flags.Parse(arguments); err != nil {
 		return err
 	}
@@ -36,8 +38,8 @@ func run(arguments []string) error {
 		return nil
 	}
 	query := strings.TrimSpace(strings.Join(flags.Args(), " "))
-	if query == "" && !*interactive {
-		return fmt.Errorf("usage: go run ./cmd/m3tal-ai [--docs PATH] [--api URL] [--model CHECKPOINT] [--interactive] [--json] [--version] \"question or M3TAL request\"")
+	if query == "" && !*interactive && !*runEval {
+		return fmt.Errorf("usage: go run ./cmd/m3tal-ai [--docs PATH] [--api URL] [--model CHECKPOINT] [--interactive] [--json] [--version] [--eval] \"question or M3TAL request\"")
 	}
 
 	docPaths := defaultDocsPaths()
@@ -72,6 +74,30 @@ func run(arguments []string) error {
 		}
 		agent.SetLanguageModel(model)
 		fmt.Fprintln(os.Stderr, "loaded local language-model checkpoint")
+	}
+	if *runEval {
+		evalMetrics := agent.RunEval()
+		if *jsonOutput {
+			payload, err := json.MarshalIndent(evalMetrics, "", "  ")
+			if err != nil {
+				return err
+			}
+			fmt.Println(string(payload))
+			if agent.HasLanguageModel() {
+				planMetrics := agent.RunPlanEval()
+				planPayload, err := json.MarshalIndent(planMetrics, "", "  ")
+				if err != nil {
+					return err
+				}
+				fmt.Println(string(planPayload))
+			}
+			return nil
+		}
+		fmt.Println(assistant.PrintEvalReport(evalMetrics))
+		if agent.HasLanguageModel() {
+			fmt.Println(assistant.PrintPlanEvalReport(agent.RunPlanEval()))
+		}
+		return nil
 	}
 	if err := agent.PingCore(context.Background()); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: %v\n", err)

@@ -19,7 +19,7 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: go run ./cmd/m3tal-lm train|generate [flags]")
+		return fmt.Errorf("usage: go run ./cmd/m3tal-lm train|eval|generate [flags]")
 	}
 	switch args[0] {
 	case "train":
@@ -75,6 +75,30 @@ func run(args []string) error {
 		}
 		fmt.Printf("saved checkpoint: %s (vocabulary %d, parameters %d)\n", *checkpoint, len(tokenizer.Tokens), model.ParameterCount())
 		return nil
+	case "eval":
+		flags := flag.NewFlagSet("eval", flag.ContinueOnError)
+		checkpoint := flags.String("checkpoint", "models/m3tal-small.json", "model checkpoint path")
+		corpusArg := flags.String("corpus", "", "text file or path-list of directories containing evaluation text")
+		if err := flags.Parse(args[1:]); err != nil {
+			return err
+		}
+		if strings.TrimSpace(*corpusArg) == "" {
+			return fmt.Errorf("--corpus is required")
+		}
+		model, err := lm.LoadCheckpoint(*checkpoint)
+		if err != nil {
+			return err
+		}
+		texts, err := lm.LoadCorpus(strings.Split(*corpusArg, string(os.PathListSeparator)))
+		if err != nil {
+			return err
+		}
+		evalLoss, err := model.Evaluate(texts)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("evaluation loss %.4f perplexity %.2f\n", evalLoss, math.Exp(evalLoss))
+		return nil
 	case "generate":
 		flags := flag.NewFlagSet("generate", flag.ContinueOnError)
 		checkpoint := flags.String("checkpoint", "models/m3tal-small.json", "model checkpoint path")
@@ -96,6 +120,6 @@ func run(args []string) error {
 		fmt.Println(generated)
 		return nil
 	default:
-		return fmt.Errorf("unknown command %q; use train or generate", args[0])
+		return fmt.Errorf("unknown command %q; use train, eval, or generate", args[0])
 	}
 }
