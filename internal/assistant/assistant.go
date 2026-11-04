@@ -467,9 +467,13 @@ func (assistant *Assistant) printKnowledge(query string, output io.Writer) error
 		if err != nil {
 			return err
 		}
+		if draftStatesUncertainty(draft) {
+			fmt.Fprintf(output, "Local model found no answer in retrieved sources:\n%s\n\n", strings.TrimSpace(draft))
+			printKnowledgeExcerpts(results, output)
+			return nil
+		}
 		if draftCitesSources(draft, results) {
-			fmt.Fprintf(output, "Local model draft (check against sources):\n%s\n\n", strings.TrimSpace(draft))
-			printKnowledgeSources(results, output)
+			printGroundedAnswer(draft, results, output)
 			return nil
 		}
 		fmt.Fprintln(output, "The local model draft was not grounded in retrieved sources; showing excerpts instead.")
@@ -483,29 +487,19 @@ func (assistant *Assistant) draftKnowledgeAnswer(query string, results []Knowled
 	prompt.WriteString("Question: ")
 	prompt.WriteString(query)
 	prompt.WriteString("\nReference notes:\n")
-	for _, result := range results {
-		fmt.Fprintf(&prompt, "[%s] %s\n%s\n", result.Title, result.Source, result.Excerpt)
+	for i, result := range results {
+		title := result.Title
+		if title == "" {
+			title = filepath.Base(result.Source)
+		}
+		fmt.Fprintf(&prompt, "[%d] %s (%s)\n%s\n", i+1, title, result.Source, result.Excerpt)
 	}
-	prompt.WriteString("Answer using the reference notes and mention a source title or file name. If they do not contain the answer, say so.\nAnswer:")
+	prompt.WriteString("Answer using the reference notes and cite sources with [1], [2], or title. If they do not contain the answer, say so.\nAnswer:")
 	answer, err := assistant.languageModel.Generate(prompt.String(), 120, 0.7, 31)
 	if err != nil {
 		return "", fmt.Errorf("generate local answer: %w", err)
 	}
 	return strings.TrimSpace(strings.TrimPrefix(answer, prompt.String())), nil
-}
-
-func draftCitesSources(draft string, results []KnowledgeResult) bool {
-	lower := strings.ToLower(draft)
-	for _, result := range results {
-		if result.Title != "" && strings.Contains(lower, strings.ToLower(result.Title)) {
-			return true
-		}
-		base := filepath.Base(result.Source)
-		if base != "" && strings.Contains(lower, strings.ToLower(base)) {
-			return true
-		}
-	}
-	return false
 }
 
 func printKnowledgeSources(results []KnowledgeResult, output io.Writer) {

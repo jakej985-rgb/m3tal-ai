@@ -88,6 +88,7 @@ type EvalResult struct {
 	RAGCitesSource      bool
 	RAGValidUTF8        bool
 	RAGSaysDontKnow     bool
+	CitedSources        []string
 }
 
 // EvalMetrics aggregates results across the eval set
@@ -132,8 +133,11 @@ func (assistant *Assistant) RunEval() EvalMetrics {
 					if err == nil {
 						result.HasRAGAnswer = true
 						result.RAGCitesSource = draftCitesSources(draft, results)
-						result.RAGValidUTF8 = strings.ToValidUTF8(draft, "�") == draft
-						result.RAGSaysDontKnow = strings.Contains(strings.ToLower(draft), "don't know") || strings.Contains(strings.ToLower(draft), "not contain")
+						for _, c := range extractCitations(draft, results) {
+							result.CitedSources = append(result.CitedSources, c.Source)
+						}
+						result.RAGValidUTF8 = strings.ToValidUTF8(draft, "") == draft
+						result.RAGSaysDontKnow = draftStatesUncertainty(draft)
 					}
 				}
 			}
@@ -276,8 +280,12 @@ func PrintEvalReport(metrics EvalMetrics) string {
 				fmt.Fprintln(&b, "  ✗ Source mismatch")
 			}
 			if r.HasRAGAnswer {
-				fmt.Fprintf(&b, "  RAG: cites=%v valid-utf8=%v dont-know=%v\n", 
+				fmt.Fprintf(&b, "  RAG: cites=%v valid-utf8=%v dont-know=%v", 
 					r.RAGCitesSource, r.RAGValidUTF8, r.RAGSaysDontKnow)
+				if len(r.CitedSources) > 0 {
+					fmt.Fprintf(&b, " cited=%v", r.CitedSources)
+				}
+				fmt.Fprintln(&b)
 			}
 		} else {
 			fmt.Fprintln(&b, "  ✗ No retrieval")
