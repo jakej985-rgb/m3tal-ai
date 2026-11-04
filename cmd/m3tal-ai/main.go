@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"m3tal-ai/internal/assistant"
+	"m3tal-ai/internal/lm"
 )
 
 func main() {
@@ -23,12 +24,20 @@ func run(arguments []string) error {
 	flags := flag.NewFlagSet("m3tal-ai", flag.ContinueOnError)
 	docsFlag := flags.String("docs", "", "additional documentation file or directory (path-list separated)")
 	apiURL := flags.String("api", os.Getenv("M3TAL_API_URL"), "M3TAL Core API URL (default http://localhost:5050)")
+	modelPath := flags.String("model", os.Getenv("M3TAL_MODEL_PATH"), "optional local language-model checkpoint")
+	interactive := flags.Bool("interactive", false, "run an interactive assistant session")
+	jsonOutput := flags.Bool("json", false, "print Core payloads as JSON")
+	showVersion := flags.Bool("version", false, "print version and exit")
 	if err := flags.Parse(arguments); err != nil {
 		return err
 	}
+	if *showVersion {
+		fmt.Printf("m3tal-ai %s\n", assistant.Version)
+		return nil
+	}
 	query := strings.TrimSpace(strings.Join(flags.Args(), " "))
-	if query == "" {
-		return fmt.Errorf("usage: go run ./cmd/m3tal-ai [--docs PATH] [--api URL] \"question or M3TAL request\"")
+	if query == "" && !*interactive {
+		return fmt.Errorf("usage: go run ./cmd/m3tal-ai [--docs PATH] [--api URL] [--model CHECKPOINT] [--interactive] [--json] [--version] \"question or M3TAL request\"")
 	}
 
 	docPaths := defaultDocsPaths()
@@ -44,12 +53,62 @@ func run(arguments []string) error {
 	if err != nil {
 		return err
 	}
-	confirm := func(action string) bool {
-		fmt.Fprintf(os.Stderr, "Confirm M3TAL Core action '%s'? [y/N] ", action)
-		answer, _ := bufio.NewReader(os.Stdin).ReadString('\n')
-		return strings.EqualFold(strings.TrimSpace(answer), "y") || strings.EqualFold(strings.TrimSpace(answer), "yes")
+	agent.SetJSONOutput(*jsonOutput)
+	stats := agent.Knowledge().Stats()
+	fmt.Fprintln(os.Stderr, agent.Knowledge().Report())
+	if len(stats.MissingRoots) > 0 {
+		fmt.Fprintf(os.Stderr, "warning: %d documentation root(s) not found\n", len(stats.MissingRoots))
 	}
-	return agent.Ask(context.Background(), query, confirm, os.Stdout)
+	if stats.Files == 0 && stats.Documents == 0 {
+		fmt.Fprintln(os.Stderr, "warning: knowledge base is empty; add docs with --docs or set M3TAL_DOCS_PATHS")
+	}
+	if *modelPath != "" {
+		if _, err := os.Stat(*modelPath); err != nil {
+			return fmt.Errorf("model checkpoint not readable: %w", err)
+		}
+		model, err := lm.LoadCheckpoint(*modelPath)
+		if err != nil {
+			return fmt.Errorf("load local model: %w", err)
+		}
+		agent.SetLanguageModel(model)
+		fmt.Fprintln(os.Stderr, "loaded local language-model checkpoint")
+	}
+	if err := agent.PingCore(context.Background()); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: %v\n", err)
+	}
+	reader := bufio.NewReader(os.Stdin)
+	confirm := func(action string) bool {
+		fmt.Fprintf(os.Stderr, "Type exactly to confirm: %s\n> ", action)
+		answer, _ := reader.ReadString('\n')
+		return confirmationMatches(action, answer)
+	}
+	if !*interactive {
+		return agent.Ask(context.Background(), query, confirm, os.Stdout)
+	}
+	for {
+		fmt.Fprint(os.Stdout, "m3tal> ")
+		line, readErr := reader.ReadString('\n')
+		line = strings.TrimSpace(line)
+		if readErr != nil && line == "" {
+			return nil
+		}
+		if line == "exit" || line == "quit" {
+			return nil
+		}
+		if line == "" {
+			continue
+		}
+		if err := agent.Ask(context.Background(), line, confirm, os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, "m3tal-ai:", err)
+		}
+		if readErr != nil {
+			return nil
+		}
+	}
+}
+
+func confirmationMatches(expected, actual string) bool {
+	return strings.TrimSpace(actual) == expected
 }
 
 func defaultDocsPaths() []string {
