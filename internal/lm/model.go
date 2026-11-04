@@ -29,7 +29,7 @@ func (c *Config) Normalize() {
 }
 
 // DefaultConfig fits an instruction-capable training prototype on CPU-only machines.
-func DefaultConfig() Config { return Config{Context: 128, Width: 32, Layers: 2, Heads: 2} }
+func DefaultConfig() Config { return Config{Context: 256, Width: 32, Layers: 2, Heads: 2} }
 
 // parameter owns contiguous float32 values, gradients, and Adam state.
 type parameter struct {
@@ -87,7 +87,7 @@ func (m *Model) addParameter(parameter *parameter) *parameter {
 // NewModel initializes weights with a deterministic seed.
 func NewModel(config Config, tokenizer *Tokenizer, seed int64) (*Model, error) {
 	config.Normalize()
-	if config.Context < 2 || config.Context > 512 || config.Width < 2 || config.Width > 128 || tokenizer == nil || len(tokenizer.Tokens) < 256 || len(tokenizer.Tokens) > 4096 {
+	if config.Context < 2 || config.Context > 2048 || config.Width < 2 || config.Width > 256 || tokenizer == nil || len(tokenizer.Tokens) < 256 || len(tokenizer.Tokens) > 4096 {
 		return nil, fmt.Errorf("invalid model config or tokenizer")
 	}
 	if config.Layers < 1 || config.Layers > 8 {
@@ -507,36 +507,103 @@ func (m *Model) Evaluate(texts []string) (float64, error) {
 	return total/float64(len(ids)-1), nil
 }
 
-// Generate samples tokens at the requested temperature using deterministic
-// seeded sampling. Sampling stays on valid printable UTF-8 boundaries.
-func (m *Model) Generate(prompt string, maxTokens int, temperature float64, seed int64) (string, error) {
-	if maxTokens < 0 || temperature <= 0 || math.IsNaN(temperature) || math.IsInf(temperature, 0) { return "", fmt.Errorf("max tokens must be non-negative and temperature finite and positive") }
+// GenerateOptions configures text generation parameters.
+type GenerateOptions struct {
+	MaxTokens         int
+	Temperature       float64
+	Seed              int64
+	RepetitionPenalty float64 // > 1.0 penalizes already generated tokens (e.g. 1.15)
+}
+
+// GenerateWithOptions generates tokens using configurable sampling, repetition penalty,
+// and UTF-8 validation.
+func (m *Model) GenerateWithOptions(prompt string, opts GenerateOptions) (string, error) {
+	if opts.MaxTokens < 0 || opts.Temperature <= 0 || math.IsNaN(opts.Temperature) || math.IsInf(opts.Temperature, 0) {
+		return "", fmt.Errorf("max tokens must be non-negative and temperature finite and positive")
+	}
+	penalty := float32(opts.RepetitionPenalty)
+	if penalty <= 0 {
+		penalty = 1.0
+	}
 	ids := m.Tokenizer.Encode(prompt)
-	if len(ids) == 0 { ids = m.Tokenizer.Encode(" ") }
+	if len(ids) == 0 {
+		ids = m.Tokenizer.Encode(" ")
+	}
 	prefix := []byte(m.Tokenizer.Decode(ids))
-	backend, rng := m.inferenceBackend(), rand.New(rand.NewSource(seed))
-	for n := 0; n < maxTokens; n++ {
-		logits := backend.Forward(ids)
+	backend, rng := m.inferenceBackend(), rand.New(rand.NewSource(opts.Seed))
+
+	generatedCounts := make(map[int]int)
+
+	for n := 0; n < opts.MaxTokens; n++ {
+		rawLogits := backend.Forward(ids)
+		logits := append([]float32(nil), rawLogits...)
+
+		if penalty > 1.0 {
+			for id, count := range generatedCounts {
+				if id >= 0 && id < len(logits) && count > 0 {
+					tok := m.Tokenizer.Tokens[id]
+					if tok == "{" || tok == "}" || tok == "[" || tok == "]" || tok == ":" || tok == "\"" || tok == "," || tok == " " || tok == "\n" {
+						continue
+					}
+					if logits[id] > 0 {
+						logits[id] /= penalty
+					} else {
+						logits[id] *= penalty
+					}
+				}
+			}
+		}
+
 		maximum := float32(math.Inf(-1))
-		for _, value := range logits { if value > maximum { maximum = value } }
+		for _, value := range logits {
+			if value > maximum {
+				maximum = value
+			}
+		}
 		probabilities := make([]float64, len(logits))
 		var sum float64
 		for id, value := range logits {
-			if id >= len(m.Tokenizer.Tokens) || !validUTF8Append(prefix, m.Tokenizer.Tokens[id]) { continue }
-			probabilities[id] = math.Exp(float64(value-maximum)/temperature)
+			if id >= len(m.Tokenizer.Tokens) || !validUTF8Append(prefix, m.Tokenizer.Tokens[id]) {
+				continue
+			}
+			probabilities[id] = math.Exp(float64(value-maximum) / opts.Temperature)
 			sum += probabilities[id]
 		}
-		if sum == 0 { for id, token := range m.Tokenizer.Tokens { if validUTF8Append(prefix, token) { probabilities[id], sum = 1, 1; break } } }
+		if sum == 0 {
+			for id, token := range m.Tokenizer.Tokens {
+				if validUTF8Append(prefix, token) {
+					probabilities[id], sum = 1, 1
+					break
+				}
+			}
+		}
 		draw, choice := rng.Float64()*sum, 0
 		for id, probability := range probabilities {
-			if probability == 0 { continue }
-			if draw < probability { choice = id; break }
+			if probability == 0 {
+				continue
+			}
+			if draw < probability {
+				choice = id
+				break
+			}
 			draw -= probability
 		}
 		ids = append(ids, choice)
+		generatedCounts[choice]++
 		prefix = appendString(prefix, m.Tokenizer.Tokens[choice])
 	}
-	return strings.ToValidUTF8(string(prefix), "�"), nil
+	return strings.ToValidUTF8(string(prefix), ""), nil
+}
+
+// Generate samples tokens at the requested temperature using deterministic
+// seeded sampling. Sampling stays on valid printable UTF-8 boundaries.
+func (m *Model) Generate(prompt string, maxTokens int, temperature float64, seed int64) (string, error) {
+	return m.GenerateWithOptions(prompt, GenerateOptions{
+		MaxTokens:         maxTokens,
+		Temperature:       temperature,
+		Seed:              seed,
+		RepetitionPenalty: 1.15,
+	})
 }
 
 func (m *Model) inferenceBackend() inferenceBackend {

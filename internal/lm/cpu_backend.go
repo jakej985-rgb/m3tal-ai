@@ -89,12 +89,17 @@ func (backend *cpuInferenceBackend) Forward(tokenIDs []int) []float32 {
 func linear32(input []float32, rows, inputSize, outputSize int, layer inferenceLayer) []float32 {
 	output := make([]float32, rows*outputSize)
 	for row := 0; row < rows; row++ {
-		for col := 0; col < outputSize; col++ {
-			sum := layer.bias[col]
-			for k := 0; k < inputSize; k++ {
-				sum += input[row*inputSize+k] * layer.weights[k*outputSize+col]
+		outRow := output[row*outputSize : (row+1)*outputSize]
+		copy(outRow, layer.bias)
+		inRow := input[row*inputSize : (row+1)*inputSize]
+		for k, val := range inRow {
+			if val == 0 {
+				continue
 			}
-			output[row*outputSize+col] = sum
+			wRow := layer.weights[k*outputSize : (k+1)*outputSize]
+			for col := 0; col < outputSize; col++ {
+				outRow[col] += val * wRow[col]
+			}
 		}
 	}
 	return output

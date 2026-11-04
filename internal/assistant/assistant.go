@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"unicode"
 
 	"m3tal-ai/internal/lm"
@@ -22,6 +23,7 @@ type Generator interface {
 // Assistant combines a small intent model, local documentation retrieval, and
 // M3TAL Core tools.
 type Assistant struct {
+	mu            sync.Mutex
 	classifier    *classifier
 	knowledge     *KnowledgeBase
 	core          *CoreAPI
@@ -119,7 +121,7 @@ func (assistant *Assistant) Ask(ctx context.Context, query string, confirm func(
 		if err := assistant.printCoreData(ctx, "/api/v2/containers/"+url.PathEscape(name)+"/logs?tail=100", "Recent logs for "+name, output); err != nil {
 			return err
 		}
-		assistant.lastTarget = &namedTarget{"container", name}
+		assistant.setLastTarget("container", name)
 		return nil
 	case intentUnknown:
 		fmt.Fprintln(output, "I'm not sure I understood. Did you mean system stats, health, running containers, logs for a named container, a stack/service action, or a M3TAL documentation question?")
@@ -141,7 +143,7 @@ func (assistant *Assistant) printCoreContainers(ctx context.Context, query strin
 	if target != "" {
 		filtered := filterServicesForContainer(data, target)
 		if len(filtered) > 0 {
-			assistant.lastTarget = &namedTarget{"container", target}
+			assistant.setLastTarget("container", target)
 			fmt.Fprint(output, formatCorePayload("M3TAL container: "+target, filtered, assistant.jsonOutput))
 			return nil
 		}
@@ -234,12 +236,33 @@ func (assistant *Assistant) controlTarget(ctx context.Context, query string, spe
 	if err != nil {
 		return err
 	}
-	assistant.lastTarget = &namedTarget{spec.targetType, name}
+	assistant.setLastTarget(spec.targetType, name)
 	fmt.Fprintf(output, "%s %s %s completed.\n", spec.targetType, spec.action, name)
 	if len(result) > 0 {
 		fmt.Fprint(output, formatCorePayload("Result", result, assistant.jsonOutput))
 	}
 	return nil
+}
+
+func (assistant *Assistant) setLastTarget(kind, name string) {
+	assistant.mu.Lock()
+	defer assistant.mu.Unlock()
+	assistant.lastTarget = &namedTarget{kind, name}
+}
+
+func (assistant *Assistant) clearLastTarget() {
+	assistant.mu.Lock()
+	defer assistant.mu.Unlock()
+	assistant.lastTarget = nil
+}
+
+func (assistant *Assistant) getLastTarget(kind string) (string, bool) {
+	assistant.mu.Lock()
+	defer assistant.mu.Unlock()
+	if assistant.lastTarget != nil && assistant.lastTarget.kind == kind {
+		return assistant.lastTarget.name, true
+	}
+	return "", false
 }
 
 func (assistant *Assistant) resolveTarget(ctx context.Context, query, kind, name string, err error) (string, error) {
@@ -250,11 +273,11 @@ func (assistant *Assistant) resolveTarget(ctx context.Context, query, kind, name
 	if err == nil {
 		return name, nil
 	}
-	if assistant.lastTarget != nil && assistant.lastTarget.kind == kind {
-		if validateErr := assistant.validateTarget(ctx, kind, assistant.lastTarget.name); validateErr == nil {
-			return assistant.lastTarget.name, nil
+	if candidate, ok := assistant.getLastTarget(kind); ok {
+		if validateErr := assistant.validateTarget(ctx, kind, candidate); validateErr == nil {
+			return candidate, nil
 		}
-		assistant.lastTarget = nil
+		assistant.clearLastTarget()
 	}
 	_ = query
 	return "", err
@@ -337,38 +360,46 @@ func extractFirstJSONObject(s string) (string, error) {
 
 func parsePlanJSON(generated string) (toolPlan, error) {
 	rawJSON, err := extractFirstJSONObject(generated)
+	if err == nil {
+		cleaned := stepKeyRegex.ReplaceAllString(rawJSON, `"steps":`)
+		decoder := json.NewDecoder(strings.NewReader(cleaned))
+		decoder.DisallowUnknownFields()
+		var plan toolPlan
+		if decodeErr := decoder.Decode(&plan); decodeErr == nil {
+			var trailing any
+			if trailingErr := decoder.Decode(&trailing); trailingErr == io.EOF {
+				if validatePlan(plan) == nil {
+					return plan, nil
+				}
+			}
+		}
+	}
+	recovered := recoverToolSteps(generated)
+	if len(recovered) > 0 {
+		plan := toolPlan{Steps: recovered}
+		if valErr := validatePlan(plan); valErr == nil {
+			return plan, nil
+		}
+	}
 	if err != nil {
 		return toolPlan{}, err
 	}
-	cleaned := stepKeyRegex.ReplaceAllString(rawJSON, `"steps":`)
-	decoder := json.NewDecoder(strings.NewReader(cleaned))
-	decoder.DisallowUnknownFields()
-	var plan toolPlan
-	if err := decoder.Decode(&plan); err != nil {
-		recovered := recoverToolSteps(rawJSON)
-		if len(recovered) > 0 {
-			plan = toolPlan{Steps: recovered}
-		} else {
-			return toolPlan{}, err
-		}
-	} else {
-		var trailing any
-		if err := decoder.Decode(&trailing); err != io.EOF {
-			return toolPlan{}, fmt.Errorf("plan contains trailing content")
-		}
-	}
+	return toolPlan{}, fmt.Errorf("model did not return a valid tool plan")
+}
+
+func validatePlan(plan toolPlan) error {
 	if len(plan.Steps) == 0 || len(plan.Steps) > 5 {
-		return toolPlan{}, fmt.Errorf("plan must have one to five steps")
+		return fmt.Errorf("plan must have one to five steps")
 	}
 	for _, step := range plan.Steps {
 		if !knownTool(step.Tool) {
-			return toolPlan{}, fmt.Errorf("unknown tool %q", step.Tool)
+			return fmt.Errorf("unknown tool %q", step.Tool)
 		}
 		if toolRequiresTarget(step.Tool) && strings.TrimSpace(step.Target) == "" {
-			return toolPlan{}, fmt.Errorf("tool %q requires a target", step.Tool)
+			return fmt.Errorf("tool %q requires a target", step.Tool)
 		}
 	}
-	return plan, nil
+	return nil
 }
 
 var stepObjectRegex = regexp.MustCompile(`\{[^{}]*"tool"[^{}]*\}`)
@@ -457,7 +488,7 @@ func (assistant *Assistant) executePlan(ctx context.Context, plan toolPlan, conf
 			if err := assistant.printCoreData(ctx, "/api/v2/containers/"+url.PathEscape(step.Target)+"/logs?tail=100", "Recent logs for "+step.Target, output); err != nil {
 				return err
 			}
-			assistant.lastTarget = &namedTarget{"container", step.Target}
+			assistant.setLastTarget("container", step.Target)
 		default:
 			spec, ok := mutationToolSpec(step.Tool)
 			if !ok {
@@ -476,7 +507,7 @@ func (assistant *Assistant) executePlan(ctx context.Context, plan toolPlan, conf
 			if err != nil {
 				return err
 			}
-			assistant.lastTarget = &namedTarget{spec.targetType, step.Target}
+			assistant.setLastTarget(spec.targetType, step.Target)
 			fmt.Fprintf(output, "%s %s %s completed.\n", spec.targetType, spec.action, step.Target)
 			if len(result) > 0 {
 				fmt.Fprint(output, formatCorePayload("Result", result, assistant.jsonOutput))
@@ -638,10 +669,14 @@ func (assistant *Assistant) draftKnowledgeAnswer(query string, results []Knowled
 		if title == "" {
 			title = filepath.Base(result.Source)
 		}
-		fmt.Fprintf(&prompt, "[%d] %s (%s)\n%s\n", i+1, title, result.Source, result.Excerpt)
+		excerpt := strings.TrimSpace(result.Excerpt)
+		if len(excerpt) > 400 {
+			excerpt = excerpt[:400] + "..."
+		}
+		fmt.Fprintf(&prompt, "[%d] %s (%s)\n%s\n", i+1, title, result.Source, excerpt)
 	}
 	prompt.WriteString("Answer using the reference notes and cite sources with [1], [2], or title. If they do not contain the answer, say so.\nAnswer:")
-	answer, err := assistant.languageModel.Generate(prompt.String(), 120, 0.7, 31)
+	answer, err := assistant.languageModel.Generate(prompt.String(), 120, 0.2, 31)
 	if err != nil {
 		return "", fmt.Errorf("generate local answer: %w", err)
 	}
