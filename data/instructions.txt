@@ -1,0 +1,111 @@
+Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. User request: show stats and health
+PLAN: {"steps":[{"tool":"stats"},{"tool":"health"}]}
+
+Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. User request: show stats then check containers
+PLAN: {"steps":[{"tool":"stats"},{"tool":"containers"}]}
+
+Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. User request: show stats and health and containers
+PLAN: {"steps":[{"tool":"stats"},{"tool":"health"},{"tool":"containers"}]}
+
+Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. User request: check health then show stats
+PLAN: {"steps":[{"tool":"health"},{"tool":"stats"}]}
+
+Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. User request: list containers and check system stats
+PLAN: {"steps":[{"tool":"containers"},{"tool":"stats"}]}
+
+Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. User request: show health and list containers
+PLAN: {"steps":[{"tool":"health"},{"tool":"containers"}]}
+
+Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. User request: restart stack media and show logs
+PLAN: {"steps":[{"tool":"restart_stack","target":"media"},{"tool":"logs","target":"media"}]}
+
+Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. User request: start container jellyfin and stop container traefik
+PLAN: {"steps":[{"tool":"start_container","target":"jellyfin"},{"tool":"stop_container","target":"traefik"}]}
+
+Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. User request: show logs for jellyfin and check stats
+PLAN: {"steps":[{"tool":"logs","target":"jellyfin"},{"tool":"stats"}]}
+
+Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. User request: restart container traefik and show health
+PLAN: {"steps":[{"tool":"restart_container","target":"traefik"},{"tool":"health"}]}
+
+Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. User request: stop stack media then start stack media
+PLAN: {"steps":[{"tool":"stop_stack","target":"media"},{"tool":"start_stack","target":"media"}]}
+
+Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. User request: restart service core and check health
+PLAN: {"steps":[{"tool":"restart_service","target":"core"},{"tool":"health"}]}
+
+Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. User request: stop container jellyfin then show containers
+PLAN: {"steps":[{"tool":"stop_container","target":"jellyfin"},{"tool":"containers"}]}
+
+Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. User request: start stack monitoring after that show health
+PLAN: {"steps":[{"tool":"start_stack","target":"monitoring"},{"tool":"health"}]}
+
+Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. User request: show logs for core and restart service core
+PLAN: {"steps":[{"tool":"logs","target":"core"},{"tool":"restart_service","target":"core"}]}
+
+Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. User request: stop service proxy then start service proxy
+PLAN: {"steps":[{"tool":"stop_service","target":"proxy"},{"tool":"start_service","target":"proxy"}]}
+
+Question: how do I install m3tal
+Reference notes:
+[1] Install (/apps/M3tal-Hub/scripts/build_hub.py)
+Run the install command to build and install M3TAL Hub.
+Answer using the reference notes and cite sources with [1], [2], or title. If they do not contain the answer, say so.
+Answer: According to [1], run the install command in build_hub.py to set up M3TAL Hub.
+
+Question: where is the m3tal config file
+Reference notes:
+[1] Configuration (/apps/M3tal-core/docs/ENVIRONMENT_VARIABLES.md)
+M3TAL environment variables and default configuration paths are documented here.
+Answer using the reference notes and cite sources with [1], [2], or title. If they do not contain the answer, say so.
+Answer: According to [1] (Configuration), configuration variables are defined in ENVIRONMENT_VARIABLES.md.
+
+Question: explain the traefik setup
+Reference notes:
+[1] Traefik (/apps/M3tal-core/docs/TRAEFIK.md)
+Traefik is deployed as the primary reverse proxy and SSL terminator for M3TAL services.
+Answer using the reference notes and cite sources with [1], [2], or title. If they do not contain the answer, say so.
+Answer: As explained in [1], Traefik serves as the primary reverse proxy and SSL terminator.
+
+Question: how does m3tal core work
+Reference notes:
+[1] Architecture (/apps/M3tal-core/docs/ARCHITECTURE.md)
+M3TAL Core provides the central daemon, REST API, container supervision, and state management.
+Answer using the reference notes and cite sources with [1], [2], or title. If they do not contain the answer, say so.
+Answer: According to [1], M3TAL Core provides the central daemon, REST API, and container supervision.
+
+Question: how do I configure the api token
+Reference notes:
+[1] API (/apps/M3tal-core/docs/API.md)
+Authenticate requests by setting the M3TAL_API_TOKEN environment variable or passing the token header.
+Answer using the reference notes and cite sources with [1], [2], or title. If they do not contain the answer, say so.
+Answer: According to [1], configure the API token by setting the M3TAL_API_TOKEN environment variable.
+
+Question: what does the doctor command do
+Reference notes:
+[1] Doctor (/apps/M3tal-core/docs/DOCTOR.md)
+The doctor command performs preflight checks, validates Docker networking, and reports configuration warnings.
+Answer using the reference notes and cite sources with [1], [2], or title. If they do not contain the answer, say so.
+Answer: According to [1], the doctor command runs preflight diagnostics and validates system configuration.
+
+Question: what is the weather today
+Reference notes:
+[1] Install (/apps/M3tal-Hub/scripts/build_hub.py)
+Run the install command to build and install M3TAL Hub.
+Answer using the reference notes and cite sources with [1], [2], or title. If they do not contain the answer, say so.
+Answer: I don't know based on the provided reference notes.
+
+Question: how do I deploy kubernetes on bare metal
+Reference notes:
+[1] Configuration (/apps/M3tal-core/docs/ENVIRONMENT_VARIABLES.md)
+M3TAL environment variables and default configuration paths are documented here.
+Answer using the reference notes and cite sources with [1], [2], or title. If they do not contain the answer, say so.
+Answer: I don't know based on the provided reference notes.
+
+Question: what database does postgresql replace
+Reference notes:
+[1] Traefik (/apps/M3tal-core/docs/TRAEFIK.md)
+Traefik is deployed as the primary reverse proxy and SSL terminator for M3TAL services.
+Answer using the reference notes and cite sources with [1], [2], or title. If they do not contain the answer, say so.
+Answer: I don't know based on the provided reference notes.
+

@@ -19,7 +19,7 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: go run ./cmd/m3tal-lm train|eval|generate [flags]")
+		return fmt.Errorf("usage: go run ./cmd/m3tal-lm train|eval|generate|instructions [flags]")
 	}
 	switch args[0] {
 	case "train":
@@ -27,6 +27,7 @@ func run(args []string) error {
 		corpusArg := flags.String("corpus", "", "text file or path-list of directories containing training text")
 		evalArg := flags.String("eval-corpus", "", "optional separate held-out text path-list")
 		checkpoint := flags.String("checkpoint", "models/m3tal-small.json", "output checkpoint path")
+		includeInstructions := flags.Bool("include-instructions", false, "include curated self-owned instruction examples in training corpus")
 		epochs := flags.Int("epochs", 2, "training epochs")
 		steps := flags.Int("steps", 40, "optimizer steps per epoch")
 		vocab := flags.Int("vocab", 320, "BPE tokenizer vocabulary size")
@@ -43,6 +44,9 @@ func run(args []string) error {
 		texts, err := lm.LoadCorpus(strings.Split(*corpusArg, string(os.PathListSeparator)))
 		if err != nil {
 			return err
+		}
+		if *includeInstructions {
+			texts = append(texts, lm.FormatInstructionCorpus(lm.DefaultInstructionSet())...)
 		}
 		tokenizer, err := lm.TrainTokenizer(texts, *vocab)
 		if err != nil {
@@ -119,7 +123,19 @@ func run(args []string) error {
 		}
 		fmt.Println(generated)
 		return nil
+	case "instructions":
+		flags := flag.NewFlagSet("instructions", flag.ContinueOnError)
+		output := flags.String("output", "data/instructions.txt", "output instruction corpus path")
+		if err := flags.Parse(args[1:]); err != nil {
+			return err
+		}
+		examples := lm.DefaultInstructionSet()
+		if err := lm.WriteInstructionCorpusFile(*output, examples); err != nil {
+			return err
+		}
+		fmt.Printf("wrote %d instruction examples to %s\n", len(examples), *output)
+		return nil
 	default:
-		return fmt.Errorf("unknown command %q; use train, eval, or generate", args[0])
+		return fmt.Errorf("unknown command %q; use train, eval, generate, or instructions", args[0])
 	}
 }
