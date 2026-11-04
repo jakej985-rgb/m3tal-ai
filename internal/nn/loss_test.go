@@ -40,3 +40,33 @@ func TestSoftmaxCrossEntropyGradientMatchesFiniteDifference(t *testing.T) {
 		}
 	}
 }
+
+func TestSoftmaxCrossEntropyStableForLargeLogits(t *testing.T) {
+	logits, _ := tensor.NewMatrix(2, 3, []float64{10000, 9999, 9998, -10000, -9999, -9998})
+	targets, _ := tensor.NewMatrix(2, 3, []float64{1, 0, 0, 0, 0, 1})
+	objective := SoftmaxCrossEntropy{}
+	loss, err := objective.Value(logits, targets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gradient, err := objective.Gradient(logits, targets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if math.IsNaN(loss) || math.IsInf(loss, 0) {
+		t.Fatalf("loss is not finite: %v", loss)
+	}
+	for row := 0; row < gradient.Rows(); row++ {
+		sum := 0.0
+		for col := 0; col < gradient.Cols(); col++ {
+			value := gradient.At(row, col)
+			if math.IsNaN(value) || math.IsInf(value, 0) {
+				t.Fatalf("gradient (%d,%d) is not finite: %v", row, col, value)
+			}
+			sum += value
+		}
+		if math.Abs(sum) > 1e-12 {
+			t.Errorf("gradient row %d sums to %g, want 0", row, sum)
+		}
+	}
+}

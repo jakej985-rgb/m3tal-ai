@@ -18,6 +18,15 @@ type Parameter struct {
 // Values returns a copy of the parameter values.
 func (p *Parameter) Values() []float64 { return append([]float64(nil), p.values...) }
 
+// Load copies values into the parameter. Lengths must match.
+func (p *Parameter) Load(values []float64) error {
+	if len(values) != len(p.values) {
+		return fmt.Errorf("parameter size %d does not match %d values", len(p.values), len(values))
+	}
+	copy(p.values, values)
+	return nil
+}
+
 // Gradients returns a copy of the accumulated parameter gradients.
 func (p *Parameter) Gradients() []float64 { return append([]float64(nil), p.grads...) }
 

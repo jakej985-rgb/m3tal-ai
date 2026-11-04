@@ -38,12 +38,36 @@ func (v *Value) Mul(other *Value) *Value {
 	return out
 }
 
+// Div returns v / other. The denominator must be non-zero.
+func (v *Value) Div(other *Value) *Value {
+	out := &Value{Data: v.Data / other.Data, parents: []*Value{v, other}}
+	out.backward = func() {
+		v.Grad += out.Grad / other.Data
+		other.Grad -= v.Data * out.Grad / (other.Data * other.Data)
+	}
+	return out
+}
+
 // Tanh returns tanh(v).
 func (v *Value) Tanh() *Value {
 	out := &Value{Data: math.Tanh(v.Data), parents: []*Value{v}}
 	out.backward = func() {
 		v.Grad += (1 - out.Data*out.Data) * out.Grad
 	}
+	return out
+}
+
+// Exp returns e raised to v.
+func (v *Value) Exp() *Value {
+	out := &Value{Data: math.Exp(v.Data), parents: []*Value{v}}
+	out.backward = func() { v.Grad += out.Data * out.Grad }
+	return out
+}
+
+// Log returns the natural logarithm of v. Callers must ensure v.Data is positive.
+func (v *Value) Log() *Value {
+	out := &Value{Data: math.Log(v.Data), parents: []*Value{v}}
+	out.backward = func() { v.Grad += out.Grad / v.Data }
 	return out
 }
 

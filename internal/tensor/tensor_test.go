@@ -31,6 +31,15 @@ func TestVectorAddAndDot(t *testing.T) {
 	}
 }
 
+func TestVectorShapeErrors(t *testing.T) {
+	if _, err := (Vector{1, 2}).Add(Vector{1}); err == nil {
+		t.Fatal("expected vector addition shape error")
+	}
+	if _, err := (Vector{1, 2}).Dot(Vector{1}); err == nil {
+		t.Fatal("expected dot product shape error")
+	}
+}
+
 func TestMatrixMultiplyTransposeAndVectorMultiply(t *testing.T) {
 	a := mustMatrix(t, 2, 3, []float64{1, 2, 3, 4, 5, 6})
 	b := mustMatrix(t, 3, 2, []float64{7, 8, 9, 10, 11, 12})
@@ -62,5 +71,8 @@ func TestMatrixShapeErrors(t *testing.T) {
 	}
 	if _, err := NewMatrix(2, 2, []float64{1}); err == nil {
 		t.Fatal("expected constructor shape error")
+	}
+	if _, err := a.MulVec(Vector{1, 2}); err == nil {
+		t.Fatal("expected matrix/vector shape error")
 	}
 }

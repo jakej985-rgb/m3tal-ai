@@ -22,3 +22,14 @@ func TestSGDAndAdamUpdateParameters(t *testing.T) {
 		t.Fatalf("Adam did not clear gradient: %v", parameter.grads[0])
 	}
 }
+
+func TestAdamBiasCorrectionAndEpsilon(t *testing.T) {
+	parameter := &Parameter{values: []float64{2}, grads: []float64{2}}
+	adam := NewAdam(0.1)
+	adam.Epsilon = 0.1
+	adam.Update([]*Parameter{parameter})
+	want := 2 - 0.1*2/(2+0.1)
+	if math.Abs(parameter.values[0]-want) > 1e-12 {
+		t.Fatalf("first Adam update = %.12f, want %.12f", parameter.values[0], want)
+	}
+}
