@@ -88,6 +88,34 @@ The doctor command performs preflight checks, validates Docker networking, and r
 Answer using the reference notes and cite sources with [1], [2], or title. If they do not contain the answer, say so.
 Answer: According to [1], the doctor command runs preflight diagnostics and validates system configuration.
 
+Question: explain docker in m3tal
+Reference notes:
+[1] Docker (/apps/M3tal-core/docs/DOCKER.md)
+M3TAL uses Docker Engine and Docker Compose V2 as its foundational container runtime with stacks in /docker.
+Answer using the reference notes and cite sources with [1], [2], or title. If they do not contain the answer, say so.
+Answer: According to [1], M3TAL uses Docker Engine and Docker Compose V2 with stacks stored in /docker.
+
+Question: where are docker compose files stored
+Reference notes:
+[1] Stacks (/apps/M3tal-core/docs/DOCKER.md)
+M3TAL organizes container workloads in declarative Compose stacks located in /docker (symlinked from /opt/m3tal/stack).
+Answer using the reference notes and cite sources with [1], [2], or title. If they do not contain the answer, say so.
+Answer: According to [1], Docker compose files are stored in /docker (symlinked from /opt/m3tal/stack).
+
+Question: what containers run by default in m3tal
+Reference notes:
+[1] Fleet (/apps/M3tal-core/docs/DOCKER.md)
+Default container fleet includes traefik for ingress routing, cloudflared for tunnels, ollama for AI inference, and jellyfin for media streaming.
+Answer using the reference notes and cite sources with [1], [2], or title. If they do not contain the answer, say so.
+Answer: According to [1], default containers include traefik, cloudflared, ollama, and jellyfin.
+
+Question: how does the m3tal-docker plugin work
+Reference notes:
+[1] Plugin (/apps/M3tal-core/docs/DOCKER.md)
+The m3tal-docker plugin interacts with unix:///var/run/docker.sock over JSON-RPC 2.0 stdio to collect container metrics and manage lifecycle actions.
+Answer using the reference notes and cite sources with [1], [2], or title. If they do not contain the answer, say so.
+Answer: As explained in [1], the m3tal-docker plugin connects to unix:///var/run/docker.sock to monitor metrics and manage containers via JSON-RPC 2.0.
+
 Question: what is the weather today
 Reference notes:
 [1] Install (/apps/M3tal-Hub/scripts/build_hub.py)

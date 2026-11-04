@@ -198,6 +198,50 @@ func DefaultInstructionSet() []InstructionExample {
 			}),
 			Completion: "According to [1], the doctor command runs preflight diagnostics and validates system configuration.",
 		},
+		{
+			Category: "rag",
+			Prompt: RAGPrompt("explain docker in m3tal", []RAGNote{
+				{
+					Title:   "Docker",
+					Source:  "/apps/M3tal-core/docs/DOCKER.md",
+					Excerpt: "M3TAL uses Docker Engine and Docker Compose V2 as its foundational container runtime with stacks in /docker.",
+				},
+			}),
+			Completion: "According to [1], M3TAL uses Docker Engine and Docker Compose V2 with stacks stored in /docker.",
+		},
+		{
+			Category: "rag",
+			Prompt: RAGPrompt("where are docker compose files stored", []RAGNote{
+				{
+					Title:   "Stacks",
+					Source:  "/apps/M3tal-core/docs/DOCKER.md",
+					Excerpt: "M3TAL organizes container workloads in declarative Compose stacks located in /docker (symlinked from /opt/m3tal/stack).",
+				},
+			}),
+			Completion: "According to [1], Docker compose files are stored in /docker (symlinked from /opt/m3tal/stack).",
+		},
+		{
+			Category: "rag",
+			Prompt: RAGPrompt("what containers run by default in m3tal", []RAGNote{
+				{
+					Title:   "Fleet",
+					Source:  "/apps/M3tal-core/docs/DOCKER.md",
+					Excerpt: "Default container fleet includes traefik for ingress routing, cloudflared for tunnels, ollama for AI inference, and jellyfin for media streaming.",
+				},
+			}),
+			Completion: "According to [1], default containers include traefik, cloudflared, ollama, and jellyfin.",
+		},
+		{
+			Category: "rag",
+			Prompt: RAGPrompt("how does the m3tal-docker plugin work", []RAGNote{
+				{
+					Title:   "Plugin",
+					Source:  "/apps/M3tal-core/docs/DOCKER.md",
+					Excerpt: "The m3tal-docker plugin interacts with unix:///var/run/docker.sock over JSON-RPC 2.0 stdio to collect container metrics and manage lifecycle actions.",
+				},
+			}),
+			Completion: "As explained in [1], the m3tal-docker plugin connects to unix:///var/run/docker.sock to monitor metrics and manage containers via JSON-RPC 2.0.",
+		},
 
 		// Grounded Q&A abstention / negative examples
 		{

@@ -59,6 +59,8 @@ var trainingExamples = []example{
 	{"how does m3tal core work", intentDocs}, {"what apps are in m3tal hub", intentDocs}, {"tell me about monster lab", intentDocs},
 	{"how do i configure the api token", intentDocs}, {"where can i find the documentation", intentDocs}, {"help me set up m3tal", intentDocs},
 	{"how do i expose an app through the proxy", intentDocs}, {"what does the doctor command do", intentDocs}, {"how are apps deployed to the hub", intentDocs},
+	{"explain docker in m3tal", intentDocs}, {"where are docker compose files stored", intentDocs}, {"how does docker work", intentDocs},
+	{"tell me about docker stacks and containers", intentDocs}, {"how does the m3tal-docker plugin work", intentDocs},
 	{"start the media stack", intentStartStack}, {"bring up the traefik stack", intentStartStack}, {"deploy stack jellyfin", intentStartStack},
 	{"start stack downloads", intentStartStack}, {"turn on the homelab stack", intentStartStack}, {"launch stack media", intentStartStack},
 	{"stop the media stack", intentStopStack}, {"bring down stack traefik", intentStopStack}, {"shut down stack jellyfin", intentStopStack},
@@ -355,7 +357,7 @@ func deterministicIntent(query string) (intent, bool) {
 	if words["stats"] || words["metrics"] || words["cpu"] || words["memory"] || words["disk"] || words["uptime"] || words["telemetry"] {
 		matches[intentStats] = true
 	}
-	if words["docs"] || words["documentation"] || words["install"] || words["installation"] || words["configure"] || words["configuration"] || words["explain"] {
+	if words["docs"] || words["documentation"] || words["install"] || words["installation"] || words["configure"] || words["configuration"] || words["explain"] || words["guide"] || words["manual"] || (words["where"] && (words["file"] || words["files"] || words["config"] || words["stored"] || words["docs"])) || ((words["how"] || words["what"]) && (words["work"] || words["works"] || words["architected"] || words["architecture"])) {
 		matches[intentDocs] = true
 	}
 	if len(matches) != 1 {

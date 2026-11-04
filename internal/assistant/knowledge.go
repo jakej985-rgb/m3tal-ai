@@ -17,10 +17,11 @@ const maxIndexedFileSize = 1024 * 1024
 const maxKnowledgeResults = 5
 
 type document struct {
-	source string
-	title  string
-	text   string
-	terms  map[string]int
+	source   string
+	title    string
+	docTitle string
+	text     string
+	terms    map[string]int
 }
 
 // IndexStats summarizes what the knowledge base indexed and skipped.
@@ -130,7 +131,7 @@ func LoadKnowledgeBase(roots []string) (*KnowledgeBase, error) {
 	}
 	base.documentFreq = make(map[string]int)
 	for index := range base.documents {
-		base.documents[index].terms = termCounts(base.documents[index].text)
+		base.documents[index].terms = termCounts(base.documents[index].docTitle + " " + base.documents[index].title + " " + base.documents[index].text)
 		for term := range base.documents[index].terms {
 			base.documentFreq[term]++
 		}
@@ -193,8 +194,38 @@ func (base *KnowledgeBase) Search(query string, limit int) []KnowledgeResult {
 			idf := math.Log(1 + float64(len(base.documents)-documentFrequency+1)/float64(documentFrequency+1))
 			score += idf * float64(frequency) / (float64(frequency) + 1.2)
 		}
-		if strings.EqualFold(filepath.Base(doc.source), "README.md") {
+		baseName := filepath.Base(doc.source)
+		lowerBase := strings.ToLower(baseName)
+		slashPath := filepath.ToSlash(strings.ToLower(doc.source))
+		if strings.EqualFold(baseName, "README.md") {
 			score *= 0.55
+		} else if strings.HasPrefix(lowerBase, "changelog") || strings.HasPrefix(lowerBase, "fixes") || strings.HasPrefix(lowerBase, "audit") || strings.Contains(lowerBase, "_test.") {
+			score *= 0.3
+		}
+		if strings.Contains(slashPath, "/tests/") || strings.Contains(slashPath, "/scripts/") || strings.Contains(slashPath, "/reports/") {
+			score *= 0.4
+		}
+		if strings.Contains(slashPath, "/docs/") {
+			score *= 1.4
+		}
+		if sourceFile(doc.source) {
+			score *= 0.6
+		}
+		baseNoExt := strings.TrimSuffix(lowerBase, filepath.Ext(lowerBase))
+		lowerTitle := strings.ToLower(doc.title)
+		for _, term := range queryTerms {
+			if baseNoExt == term {
+				score *= 1.6
+				break
+			}
+			if strings.Contains(lowerBase, term) {
+				score *= 1.3
+				break
+			}
+			if strings.Contains(lowerTitle, term) {
+				score *= 1.2
+				break
+			}
 		}
 		if score > 0 {
 			kind := "Documentation"
@@ -258,11 +289,12 @@ func (base *KnowledgeBase) addFile(path string) error {
 	if filepath.Base(path) == "manifest.yml" || filepath.Base(path) == "manifest.yaml" {
 		base.apps = append(base.apps, parseHubManifest(string(contents))...)
 	}
-	for _, chunk := range splitDocument(string(contents)) {
+	chunks, docTitle := splitDocument(string(contents))
+	for _, chunk := range chunks {
 		if strings.TrimSpace(chunk.text) == "" {
 			continue
 		}
-		base.documents = append(base.documents, document{source: filepath.Clean(path), title: chunk.title, text: chunk.text})
+		base.documents = append(base.documents, document{source: filepath.Clean(path), title: chunk.title, docTitle: docTitle, text: chunk.text})
 	}
 	return nil
 }
@@ -314,10 +346,11 @@ func unquote(value string) string {
 
 type documentChunk struct{ title, text string }
 
-func splitDocument(content string) []documentChunk {
+func splitDocument(content string) ([]documentChunk, string) {
 	lines := strings.Split(content, "\n")
 	var chunks []documentChunk
 	var current []string
+	docTitle := ""
 	title := ""
 	flush := func() {
 		text := strings.TrimSpace(strings.Join(current, "\n"))
@@ -334,7 +367,11 @@ func splitDocument(content string) []documentChunk {
 			flush()
 		}
 		if isHeading {
-			title = strings.TrimSpace(strings.TrimLeft(trimmed, "#"))
+			headingText := strings.TrimSpace(strings.TrimLeft(trimmed, "#"))
+			if strings.HasPrefix(trimmed, "# ") && docTitle == "" {
+				docTitle = headingText
+			}
+			title = headingText
 		}
 		if isRegistryEntry {
 			title = strings.TrimSpace(strings.TrimPrefix(trimmed, "- id:"))
@@ -345,7 +382,7 @@ func splitDocument(content string) []documentChunk {
 		}
 	}
 	flush()
-	return chunks
+	return chunks, docTitle
 }
 
 func supportedText(path string) bool {

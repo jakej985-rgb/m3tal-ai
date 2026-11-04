@@ -75,6 +75,18 @@ var EvalSet = []EvalQuestion{
 		ExpectedHeading: "Doctor",
 		IsDocsQuestion:  true,
 	},
+	{
+		Question:        "where are docker compose files stored",
+		ExpectedSource:  "M3tal-core",
+		ExpectedHeading: "Docker",
+		IsDocsQuestion:  true,
+	},
+	{
+		Question:        "how does docker work in m3tal",
+		ExpectedSource:  "M3tal-core",
+		ExpectedHeading: "Docker",
+		IsDocsQuestion:  true,
+	},
 }
 
 // EvalResult stores metrics for a single question
