@@ -132,14 +132,15 @@ func (m *Model) forward(ids []int) forwardCache {
 
 func (m *Model) backward(cache forwardCache, targets []int) {
 	width, vocab, rows := m.Config.Width, len(m.Tokenizer.Tokens), len(cache.ids)
+	invRows := float32(1.0 / float64(rows))
 	
-	// Gradient for logits: softmax derivative at all positions
+	// Gradient for logits: softmax derivative at all positions for mean window loss
 	gradientLogits := make([]float32, rows*vocab)
 	for i := 0; i < rows; i++ {
 		for j := 0; j < vocab; j++ {
-			gradientLogits[i*vocab+j] = cache.probabilities[i*vocab+j]
+			gradientLogits[i*vocab+j] = cache.probabilities[i*vocab+j] * invRows
 		}
-		gradientLogits[i*vocab+targets[i]] -= 1
+		gradientLogits[i*vocab+targets[i]] -= invRows
 	}
 	
 	// Backprop through output layer (all positions)
@@ -173,13 +174,16 @@ func (m *Model) backward(cache forwardCache, targets []int) {
 		}
 	}
 	for i := 0; i < rows; i++ {
-		for h := 0; h < width*2; h++ {
-			m.ffIn.bias.gradient[h] += gradientHidden[i*width*2+h]
+		for d := 0; d < width; d++ {
+			m.ffOut.bias.gradient[d] += gradientEncoded[i*width+d]
 		}
 	}
 	for i := 0; i < rows; i++ {
 		for h := 0; h < width*2; h++ {
 			gradientHidden[i*width*2+h] *= 1 - cache.hidden[i*width*2+h]*cache.hidden[i*width*2+h]
+		}
+		for h := 0; h < width*2; h++ {
+			m.ffIn.bias.gradient[h] += gradientHidden[i*width*2+h]
 		}
 		for d := 0; d < width; d++ {
 			for h := 0; h < width*2; h++ {
@@ -190,7 +194,7 @@ func (m *Model) backward(cache forwardCache, targets []int) {
 		}
 	}
 	
-	// Backprop through attention (all positions)
+	// Backprop through attention projection (all positions)
 	gradientAttended := make([]float32, rows*width)
 	for i := 0; i < rows; i++ {
 		for input := 0; input < width; input++ {
@@ -218,6 +222,7 @@ func (m *Model) backward(cache forwardCache, targets []int) {
 	}
 	
 	gradientX := make([]float32, rows*width)
+	copy(gradientX, gradientResidual)
 	gradientQuery := make([]float32, rows*width)
 	gradientKeys := make([]float32, rows*width)
 	gradientValues := make([]float32, rows*width)
@@ -304,12 +309,20 @@ func tokenLoss32(logits []float32, target int) float64 {
 
 // Mean window loss: average cross-entropy over all positions
 func meanWindowLoss(cache forwardCache, targets []int) float64 {
+	if len(targets) == 0 || len(cache.ids) == 0 {
+		return 0
+	}
+	rows := len(cache.ids)
+	if len(targets) < rows {
+		rows = len(targets)
+	}
+	vocab := len(cache.logits) / len(cache.ids)
 	totalLoss := 0.0
-	for i := range targets {
-		rowLogits := cache.logits[i*len(cache.probabilities)/len(targets) : (i+1)*len(cache.probabilities)/len(targets)]
+	for i := 0; i < rows; i++ {
+		rowLogits := cache.logits[i*vocab : (i+1)*vocab]
 		totalLoss += tokenLoss32(rowLogits, targets[i])
 	}
-	return totalLoss / float64(len(targets))
+	return totalLoss / float64(rows)
 }
 
 // Train performs causal full-window training with float32 parameters and Adam updates.

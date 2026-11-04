@@ -2,6 +2,7 @@ package lm
 
 import (
 	"encoding/json"
+	"math"
 	"os"
 	"strings"
 	"testing"
@@ -99,7 +100,40 @@ func TestGenerationAlwaysReturnsValidUTF8(t *testing.T) {
 }
 
 func TestExplicitGradientsMatchFiniteDifferences(t *testing.T) {
-	t.Skip("Gradient check disabled during causal full-window backprop refactoring")
+	tokenizer, err := TrainTokenizer([]string{"cpu gradient check café"}, 256)
+	if err != nil {
+		t.Fatal(err)
+	}
+	model, err := NewModel(Config{Context: 6, Width: 4}, tokenizer, 29)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := tokenizer.Encode("grad")
+	if len(ids) < 3 {
+		t.Fatal("expected prompt to encode to at least three tokens")
+	}
+	input := ids[:len(ids)-1]
+	targets := ids[1:]
+	zeroGradients(model.parameters)
+	model.backward(model.forward(input), targets)
+
+	const epsilon float32 = 1e-3
+	for parameterIndex, parameter := range model.parameters {
+		for i, analytic := range parameter.gradient {
+			original := parameter.values[i]
+			parameter.values[i] = original + epsilon
+			plus := meanWindowLoss(model.forward(input), targets)
+			parameter.values[i] = original - epsilon
+			minus := meanWindowLoss(model.forward(input), targets)
+			parameter.values[i] = original
+			numerical := (plus - minus) / (2 * float64(epsilon))
+			difference := math.Abs(float64(analytic) - numerical)
+			scale := math.Max(1, math.Max(math.Abs(float64(analytic)), math.Abs(numerical)))
+			if difference > 5e-2 && difference/scale > 5e-2 {
+				t.Fatalf("parameter %d[%d] analytic=%g finite-difference=%g diff=%g", parameterIndex, i, analytic, numerical, difference)
+			}
+		}
+	}
 }
 
 func TestLoadCheckpointAcceptsLegacyFloat64Values(t *testing.T) {
