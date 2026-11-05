@@ -168,8 +168,8 @@ func TestRoPENumericalReference(t *testing.T) {
 		t.Fatalf("ApplyRoPE failed: %v", err)
 	}
 
-	theta0 := 1.0                                      // 10000^(-0/4) = 1.0
-	theta1 := math.Pow(base, -2.0*1.0/4.0)             // 10000^(-0.5) = 1/100 = 0.01
+	theta0 := 1.0                          // 10000^(-0/4) = 1.0
+	theta1 := math.Pow(base, -2.0*1.0/4.0) // 10000^(-0.5) = 1/100 = 0.01
 
 	// Pos 0: angle = 0 -> identity
 	expected0 := []float64{1.0, 0.0, 0.0, 2.0}
@@ -273,9 +273,9 @@ func TestRoPEProperties(t *testing.T) {
 // TestRoPEShapes verifies RoPE on 2D, 3D, and 4D tensor layouts (no hidden sequence caps).
 func TestRoPEShapes(t *testing.T) {
 	testShapes := [][]int{
-		{128, 16},          // 2D: [seq, dim] with large sequence
-		{2, 64, 32},        // 3D: [batch, seq, dim]
-		{2, 16, 4, 32},     // 4D: [batch, seq, heads, headDim]
+		{128, 16},      // 2D: [seq, dim] with large sequence
+		{2, 64, 32},    // 3D: [batch, seq, dim]
+		{2, 16, 4, 32}, // 4D: [batch, seq, heads, headDim]
 	}
 
 	for _, shape := range testShapes {

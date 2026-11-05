@@ -1,6 +1,9 @@
-//go:build !cuda || !cgo
+//go:build !cuda
 
 package kernel
+
+// cudaCompiledFlag is false in builds without the cuda tag.
+const cudaCompiledFlag = false
 
 // cudaProbe reports CUDA as not compiled in. The real probe lives in
 // backend_cuda.go behind the `cuda` build tag and cgo.

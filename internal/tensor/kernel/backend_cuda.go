@@ -1,77 +1,35 @@
-//go:build cuda && cgo
+//go:build cuda
 
 package kernel
 
-/*
-#cgo LDFLAGS: -lcudart
-#include <cuda_runtime.h>
-#include <string.h>
-
-// Returns the number of CUDA-capable devices, or -1 when the runtime
-// cannot enumerate devices (no driver, driver/runtime mismatch, etc.).
-static int m3tal_cuda_device_count() {
-	int count = 0;
-	if (cudaGetDeviceCount(&count) != cudaSuccess) {
-		return -1;
-	}
-	return count;
-}
-
-// Fills name/major/minor for device index; leaves outputs untouched on error.
-static void m3tal_cuda_device_info(int device, char *name, int nameLen, int *major, int *minor) {
-	cudaDeviceProp prop;
-	if (cudaGetDeviceProperties(&prop, device) != cudaSuccess) {
-		return;
-	}
-	strncpy(name, prop.name, (size_t)nameLen - 1);
-	name[nameLen - 1] = '\0';
-	*major = prop.major;
-	*minor = prop.minor;
-}
-*/
-import "C"
-
 import (
 	"fmt"
-	"unsafe"
+
+	"m3tal-llm/internal/gpu"
 )
 
-// cudaProbe enumerates CUDA devices through the CUDA runtime API. It only
-// runs in binaries built with `-tags cuda` and cgo enabled.
+// cudaCompiledFlag is true in builds with the cuda tag.
+const cudaCompiledFlag = true
+
+// cudaProbe enumerates CUDA devices through the gpu package's runtime
+// bindings. Device details come from gpu.ProbeDevice (CUDA runtime API).
 func cudaProbe() []BackendInfo {
-	count := int(C.m3tal_cuda_device_count())
-	if count < 0 {
+	info, err := gpu.ProbeDevice()
+	if err != nil {
 		return []BackendInfo{{
 			Name:       "cuda",
 			Device:     "cuda",
 			CompiledIn: true,
 			Available:  false,
-			Reason: "CUDA runtime cannot enumerate devices: check that an " +
-				"NVIDIA driver is installed and matches the CUDA runtime " +
-				"(nvidia-smi; see docs/CUDA.md)",
+			Reason:     err.Error(),
 		}}
 	}
-	if count == 0 {
-		return []BackendInfo{{
-			Name:       "cuda",
-			Device:     "cuda",
-			CompiledIn: true,
-			Available:  false,
-			Reason:     "no CUDA-capable NVIDIA devices detected",
-		}}
-	}
-
-	nameBuf := make([]byte, 256)
-	var major, minor C.int
-	C.m3tal_cuda_device_info(0, (*C.char)(unsafe.Pointer(&nameBuf[0])), C.int(len(nameBuf)), &major, &minor)
-	devName := C.GoString((*C.char)(unsafe.Pointer(&nameBuf[0])))
-
 	return []BackendInfo{{
 		Name:       "cuda",
 		Device:     "cuda:0",
 		CompiledIn: true,
 		Available:  true,
-		Reason: fmt.Sprintf("%d device(s); cuda:0 = %q (compute capability %d.%d)",
-			count, devName, int(major), int(minor)),
+		Reason: fmt.Sprintf("%d device(s); cuda:0 = %q (%s)",
+			info.Count, info.Name, info.DeviceArch),
 	}}
 }

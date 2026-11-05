@@ -168,14 +168,14 @@ func TestCachedVsUncachedEquivalence(t *testing.T) {
 // TestAttentionShapeCoverage tests various batch, head, sequence length, and head dimension configurations.
 func TestAttentionShapeCoverage(t *testing.T) {
 	testCases := []struct {
-		name      string
-		batch     int
-		heads     int
-		headDim   int
-		dim       int
-		seqLen    int
-		bias      bool
-		dtype     tensor.DType
+		name    string
+		batch   int
+		heads   int
+		headDim int
+		dim     int
+		seqLen  int
+		bias    bool
+		dtype   tensor.DType
 	}{
 		{"B1_H1_T1", 1, 1, 16, 16, 1, false, tensor.Float32},
 		{"B2_H2_T5", 2, 2, 8, 16, 5, true, tensor.Float32},

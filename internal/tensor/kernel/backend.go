@@ -98,7 +98,10 @@ func probeBackends() []BackendInfo {
 // CUDA when available and falls back to CPU otherwise.
 func Select(name string) error {
 	name = strings.ToLower(strings.TrimSpace(name))
-	if name == "" || name == "auto" {
+	if name == "" {
+		name = "cpu"
+	}
+	if name == "auto" {
 		if cuda := findBackend("cuda"); cuda.CompiledIn && cuda.Available {
 			selectedBackend.Store("cuda")
 			return nil
@@ -134,7 +137,10 @@ func Select(name string) error {
 // a typo in the environment cannot break a run; use Select for strict
 // validation.
 func SelectFromEnv() error {
-	return Select(os.Getenv("M3TAL_LLM_BACKEND"))
+	if v := os.Getenv("M3TAL_LLM_BACKEND"); v != "" {
+		return Select(v)
+	}
+	return nil
 }
 
 // Selected returns the name of the currently preferred backend.
@@ -144,6 +150,11 @@ func Selected() string {
 	}
 	return "cpu"
 }
+
+// CUDACompiled reports whether the binary was built with CUDA support
+// (`-tags cuda` and cgo). It does not check for a runtime device; use
+// Probe/Select for that.
+func CUDACompiled() bool { return cudaCompiledFlag }
 
 // preferCUDA reports whether dispatch should route operations to the CUDA
 // backend. Kernel dispatch lands with the CUDA kernels; until then this only

@@ -176,11 +176,11 @@ func (t *Tensor) Scale(alpha float64) (*Tensor, error) {
 	switch t.dtype {
 	case Float32:
 		cData := out.Float32Slice()
-		kernel.ScaleFloat32Fallback(cData, aContig.Float32Slice(), float32(alpha))
+		kernel.ScaleFloat32Dispatch(cData, aContig.Float32Slice(), float32(alpha))
 		out.SetFromFloat32Slice(cData)
 	case Float64:
 		cData := out.Float64Slice()
-		kernel.ScaleFloat64Fallback(cData, aContig.Float64Slice(), alpha)
+		kernel.ScaleFloat64Dispatch(cData, aContig.Float64Slice(), alpha)
 		out.SetFromFloat64Slice(cData)
 	default:
 		return nil, fmt.Errorf("%w: Scale not implemented for %s", ErrUnsupportedDType, t.dtype)
@@ -206,9 +206,9 @@ func (t *Tensor) Sum() (float64, error) {
 	}
 	switch t.dtype {
 	case Float32:
-		return float64(kernel.SumFloat32Fallback(aContig.Float32Slice())), nil
+		return float64(kernel.SumFloat32Dispatch(aContig.Float32Slice())), nil
 	case Float64:
-		return kernel.SumFloat64Fallback(aContig.Float64Slice()), nil
+		return kernel.SumFloat64Dispatch(aContig.Float64Slice()), nil
 	default:
 		return 0, fmt.Errorf("%w: Sum not implemented for %s", ErrUnsupportedDType, t.dtype)
 	}

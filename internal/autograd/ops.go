@@ -609,7 +609,6 @@ func AddScalar(a *Variable, alpha float64) (*Variable, error) {
 	return out, nil
 }
 
-
 // broadcastShapes computes standard NumPy-style broadcasted output shape.
 func broadcastShapes(a, b []int) ([]int, error) {
 	rankA := len(a)

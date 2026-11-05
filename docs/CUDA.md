@@ -17,6 +17,14 @@ Requirements:
 - The CUDA toolkit (`nvcc`) providing `cuda_runtime.h` and `libcudart`.
 - An NVIDIA driver new enough for the toolkit you install (`nvidia-smi`).
 
+After installing the toolkit, build the CUDA kernels once per machine
+(the generated `kernels_amd64.o` is git-ignored and arch-specific):
+
+```sh
+GOFLAGS=-tags=cuda go generate ./internal/gpu
+CGO_ENABLED=1 go build -tags cuda ./...
+```
+
 ### Toolkit version vs. GPU architecture
 
 | GPU generation | Compute capability | Minimum toolkit | Maximum toolkit |
