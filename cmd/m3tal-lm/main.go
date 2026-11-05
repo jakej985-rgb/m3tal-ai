@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
@@ -10,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"m3tal-llm/internal/lm"
 	"m3tal-llm/internal/tensor/kernel"
@@ -295,6 +297,8 @@ func run(args []string) error {
 		return nil
 	case "model-info":
 		return modelInfo(args[1:])
+	case "eval-bench":
+		return evalBench(args[1:])
 	default:
 		return fmt.Errorf("unknown command %q; use train, eval, generate, instructions, dataset, backends, or model-info", args[0])
 	}
@@ -318,6 +322,8 @@ func runDataset(args []string) error {
 		return datasetSplit(args[1:])
 	case "annotate":
 		return datasetAnnotate(args[1:])
+	case "export":
+		return datasetExport(args[1:])
 	default:
 		return fmt.Errorf("unknown dataset subcommand %q; use build, report, verify, or split", args[0])
 	}
@@ -752,5 +758,221 @@ func modelInfo(args []string) error {
 	fmt.Printf("  inference weights: %.2f GiB\n", float64(weightBytes)/(1<<30))
 	fmt.Printf("  training state (weights+grad+2 Adam moments): %.2f GiB\n", float64(trainBytes)/(1<<30))
 	fmt.Printf("approx FLOPs/token (fwd+bwd ~ 6N): %.2f GFLOP\n", float64(total)*6/1e9)
+	return nil
+}
+
+// datasetExport decodes a dataset's token stream back to text — used to
+// materialize held-out evaluation corpora from validation shards.
+func datasetExport(args []string) error {
+	flags := flag.NewFlagSet("dataset export", flag.ContinueOnError)
+	out := flags.String("out", "", "output text file")
+	checkpoint := flags.String("checkpoint", "", "checkpoint providing the tokenizer (required)")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 1 || strings.TrimSpace(*out) == "" || strings.TrimSpace(*checkpoint) == "" {
+		return fmt.Errorf("usage: m3tal-lm dataset export --out FILE --checkpoint CKPT DIR")
+	}
+	model, err := lm.LoadCheckpoint(*checkpoint)
+	if err != nil {
+		return fmt.Errorf("load checkpoint tokenizer: %w", err)
+	}
+	ds, err := lm.OpenDataset(flags.Arg(0))
+	if err != nil {
+		return err
+	}
+	if fp := lm.TokenizerFingerprint(model.Tokenizer); fp != ds.Meta.Tokenizer {
+		return fmt.Errorf("dataset tokenizer %s does not match checkpoint tokenizer %s", ds.Meta.Tokenizer, fp)
+	}
+	f, err := os.Create(*out)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	w := bufio.NewWriter(f)
+	defer w.Flush()
+	var total int
+	for i := 0; i < ds.Meta.ShardCount; i++ {
+		shard, err := ds.Shard(i)
+		if err != nil {
+			return fmt.Errorf("shard %d: %w", i, err)
+		}
+		ids := make([]int, len(shard.Tokens))
+		for j, tok := range shard.Tokens {
+			ids[j] = int(tok)
+		}
+		if _, err := w.WriteString(model.Tokenizer.Decode(ids)); err != nil {
+			return err
+		}
+		if _, err := w.WriteString("\n"); err != nil {
+			return err
+		}
+		total += len(shard.Tokens)
+	}
+	fmt.Printf("exported %d tokens from %s (%d shards) to %s\n", total, flags.Arg(0), ds.Meta.ShardCount, *out)
+	return nil
+}
+
+// evalBenchReport is the machine-readable output of `eval-bench`.
+type evalBenchReport struct {
+	Checkpoint  string          `json:"checkpoint"`
+	Backend     string          `json:"backend"`
+	Corpus      string          `json:"corpus"`
+	EvalLoss    float64         `json:"eval_loss"`
+	Perplexity  float64         `json:"perplexity"`
+	EvalTokens  int             `json:"eval_tokens"`
+	Generations []evalGenResult `json:"generations"`
+	CreatedUnix int64           `json:"created_unix"`
+}
+
+type evalGenResult struct {
+	Prompt string `json:"prompt"`
+	Output string `json:"output"`
+}
+
+var defaultBenchPrompts = []string{
+	"Once upon a time",
+	"A little girl named Lily",
+	"The capital of France is",
+	"M3TAL is",
+	"def quicksort",
+}
+
+// evalBench runs a repeatable evaluation: held-out loss, fixed-seed
+// generations on a fixed prompt set, and optional baseline regression
+// detection (Stage 2 eval benchmark).
+func evalBench(args []string) error {
+	flags := flag.NewFlagSet("eval-bench", flag.ContinueOnError)
+	checkpoint := flags.String("checkpoint", "", "model checkpoint path (required)")
+	corpusArg := flags.String("corpus", "", "held-out evaluation corpus path(s), os.PathListSeparator-separated (required)")
+	promptsFile := flags.String("prompts", "", "file with one prompt per line (# comments ok); defaults to built-in set")
+	tokens := flags.Int("tokens", 60, "tokens per generation")
+	temperature := flags.Float64("temperature", 0.8, "sampling temperature")
+	seed := flags.Int64("seed", 19, "sampling seed")
+	reportOut := flags.String("report", "", "write JSON report to this path (stdout summary always printed)")
+	baseline := flags.String("baseline", "", "previous eval-bench JSON report to compare against")
+	maxIncrease := flags.Float64("max-loss-increase", 0.05, "fail if eval loss exceeds baseline by more than this")
+	maxEvalTokens := flags.Int("max-eval-tokens", 65536, "cap on corpus tokens evaluated (0 = all)")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if strings.TrimSpace(*checkpoint) == "" || strings.TrimSpace(*corpusArg) == "" {
+		return fmt.Errorf("--checkpoint and --corpus are required")
+	}
+	model, err := lm.LoadCheckpoint(*checkpoint)
+	if err != nil {
+		return err
+	}
+	texts, err := lm.LoadCorpus(strings.Split(*corpusArg, string(os.PathListSeparator)))
+	if err != nil {
+		return err
+	}
+	// Bound evaluation cost: Evaluate runs one forward pass per token, so
+	// cap the token count and truncate texts deterministically.
+	if *maxEvalTokens > 0 {
+		var kept []string
+		total := 0
+		for _, text := range texts {
+			ids := model.Tokenizer.Encode(text)
+			if total >= *maxEvalTokens {
+				break
+			}
+			if total+len(ids) > *maxEvalTokens {
+				ids = ids[:*maxEvalTokens-total]
+				text = model.Tokenizer.Decode(ids)
+			}
+			kept = append(kept, text)
+			total += len(ids)
+		}
+		texts = kept
+	}
+	evalLoss, err := model.Evaluate(texts)
+	if err != nil {
+		return err
+	}
+	evalTokens := 0
+	for _, text := range texts {
+		evalTokens += len(model.Tokenizer.Encode(text)) + len(model.Tokenizer.Encode("\n"))
+	}
+
+	prompts := append([]string(nil), defaultBenchPrompts...)
+	if *promptsFile != "" {
+		data, err := os.ReadFile(*promptsFile)
+		if err != nil {
+			return err
+		}
+		prompts = prompts[:0]
+		for _, line := range strings.Split(string(data), "\n") {
+			line = strings.TrimSpace(line)
+			if line != "" && !strings.HasPrefix(line, "#") {
+				prompts = append(prompts, line)
+			}
+		}
+		if len(prompts) == 0 {
+			return fmt.Errorf("prompts file %q contains no prompts", *promptsFile)
+		}
+	}
+
+	rep := evalBenchReport{
+		Checkpoint:  *checkpoint,
+		Backend:     kernel.Selected(),
+		Corpus:      *corpusArg,
+		EvalLoss:    evalLoss,
+		Perplexity:  math.Exp(evalLoss),
+		EvalTokens:  evalTokens,
+		CreatedUnix: time.Now().Unix(),
+	}
+	for i, prompt := range prompts {
+		out, err := model.GenerateWithOptions(prompt, lm.GenerateOptions{
+			MaxTokens:   *tokens,
+			Temperature: *temperature,
+			Seed:        *seed + int64(i),
+		})
+		if err != nil {
+			return fmt.Errorf("generate %q: %w", prompt, err)
+		}
+		rep.Generations = append(rep.Generations, evalGenResult{Prompt: prompt, Output: out})
+	}
+
+	fmt.Printf("eval-bench %s\n", *checkpoint)
+	fmt.Printf("  backend %s  corpus %s  eval_tokens %d\n", rep.Backend, rep.Corpus, rep.EvalTokens)
+	fmt.Printf("  eval loss %.4f  perplexity %.2f\n", rep.EvalLoss, rep.Perplexity)
+	for _, g := range rep.Generations {
+		fmt.Printf("  prompt %q -> %.80s%s\n", g.Prompt, g.Output, map[bool]string{true: "…", false: ""}[len(g.Output) > 80])
+	}
+
+	regressed := false
+	if *baseline != "" {
+		data, err := os.ReadFile(*baseline)
+		if err != nil {
+			return fmt.Errorf("read baseline: %w", err)
+		}
+		var base evalBenchReport
+		if err := json.Unmarshal(data, &base); err != nil {
+			return fmt.Errorf("decode baseline: %w", err)
+		}
+		diff := rep.EvalLoss - base.EvalLoss
+		fmt.Printf("  baseline loss %.4f (delta %+.4f, threshold %.4f)\n", base.EvalLoss, diff, *maxIncrease)
+		if diff > *maxIncrease {
+			regressed = true
+			fmt.Printf("  REGRESSION: eval loss increased by %.4f > %.4f\n", diff, *maxIncrease)
+		} else {
+			fmt.Println("  no regression vs baseline")
+		}
+	}
+
+	if *reportOut != "" {
+		data, err := json.MarshalIndent(rep, "", "  ")
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(*reportOut, append(data, '\n'), 0o644); err != nil {
+			return err
+		}
+		fmt.Printf("  report written to %s\n", *reportOut)
+	}
+	if regressed {
+		return fmt.Errorf("eval loss regressed vs baseline")
+	}
 	return nil
 }
