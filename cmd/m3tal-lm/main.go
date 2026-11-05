@@ -1,10 +1,14 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"math"
 	"os"
+	"os/exec"
 	"strings"
 
 	"m3tal-llm/internal/lm"
@@ -295,23 +299,105 @@ func run(args []string) error {
 }
 
 // runDataset implements the "dataset" subcommand for building sharded token
-// datasets from a text corpus using a checkpoint's tokenizer.
+// datasets from licensed corpus sources with provenance, optional
+// document-level train/validation split, dedup, and resumable shards.
 func runDataset(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: m3tal-lm dataset build --corpus PATHS --checkpoint CKPT --out DIR [--shard-tokens N] [--seed N]")
+		return fmt.Errorf("usage: m3tal-lm dataset build|report|verify|split [flags]")
 	}
 	switch args[0] {
 	case "build":
-		flags := flag.NewFlagSet("dataset build", flag.ContinueOnError)
-		corpusArg := flags.String("corpus", "", "comma-separated corpus file paths")
-		checkpoint := flags.String("checkpoint", "models/m3tal-small.json", "checkpoint providing the tokenizer")
-		outDir := flags.String("out", "", "output dataset directory")
-		shardTokensFlag := flags.Int64("shard-tokens", 0, "tokens per shard (0 = single shard)")
-		if err := flags.Parse(args[1:]); err != nil {
+		return datasetBuild(args[1:])
+	case "report":
+		return datasetReport(args[1:])
+	case "verify":
+		return datasetVerify(args[1:])
+	case "split":
+		return datasetSplit(args[1:])
+	case "annotate":
+		return datasetAnnotate(args[1:])
+	default:
+		return fmt.Errorf("unknown dataset subcommand %q; use build, report, verify, or split", args[0])
+	}
+}
+
+// chainFeed concatenates TokenFeeds so skip/consume operate across
+// source boundaries during resumed builds.
+type chainFeed struct {
+	feeds []lm.TokenFeed
+	cur   int
+	err   error
+}
+
+func (c *chainFeed) Next(n int) ([]uint32, bool) {
+	for c.cur < len(c.feeds) {
+		chunk, ok := c.feeds[c.cur].Next(n)
+		if ok {
+			return chunk, true
+		}
+		if err := c.feeds[c.cur].Err(); err != nil {
+			c.err = err
+			return nil, false
+		}
+		c.cur++
+	}
+	return nil, false
+}
+
+func (c *chainFeed) Err() error {
+	if c.err != nil {
+		return c.err
+	}
+	if c.cur < len(c.feeds) {
+		return c.feeds[c.cur].Err()
+	}
+	return nil
+}
+
+// docSplit assigns a document deterministically to the validation split
+// when its hash falls below frac of the uint64 range.
+func docSplit(text string, frac float64) bool {
+	if frac <= 0 {
+		return false
+	}
+	h := sha256.Sum256([]byte(text))
+	u := binary.BigEndian.Uint64(h[:8])
+	return float64(u)/float64(^uint64(0)) < frac
+}
+
+func datasetBuild(args []string) error {
+	flags := flag.NewFlagSet("dataset build", flag.ContinueOnError)
+	corpusArg := flags.String("corpus", "", "comma-separated corpus file paths (legacy; prefer --sources)")
+	sourcesFile := flags.String("sources", "", "JSON file listing licensed corpus sources")
+	checkpoint := flags.String("checkpoint", "models/m3tal-small.json", "checkpoint providing the tokenizer")
+	outDir := flags.String("out", "", "output dataset directory")
+	shardTokensFlag := flags.Int64("shard-tokens", 0, "tokens per shard (0 = single shard)")
+	valFrac := flags.Float64("val-frac", 0, "fraction of documents held out for validation (document-level split)")
+	dedup := flags.String("dedup", "none", "dedup strategy: none or exact (sha256 per document)")
+	resume := flags.Bool("resume", false, "resume an existing partial dataset build")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if strings.TrimSpace(*outDir) == "" {
+		return fmt.Errorf("--out is required")
+	}
+	if *valFrac < 0 || *valFrac > 0.5 {
+		return fmt.Errorf("--val-frac must be in [0, 0.5]")
+	}
+	if *dedup != "none" && *dedup != "exact" {
+		return fmt.Errorf("--dedup must be none or exact")
+	}
+
+	var sources []lm.CorpusSource
+	if *sourcesFile != "" {
+		var err error
+		sources, err = lm.LoadSources(*sourcesFile)
+		if err != nil {
 			return err
 		}
-		if strings.TrimSpace(*corpusArg) == "" || strings.TrimSpace(*outDir) == "" {
-			return fmt.Errorf("--corpus and --out are required")
+	} else {
+		if strings.TrimSpace(*corpusArg) == "" {
+			return fmt.Errorf("--sources or --corpus is required")
 		}
 		var paths []string
 		for _, p := range strings.Split(*corpusArg, ",") {
@@ -319,33 +405,320 @@ func runDataset(args []string) error {
 				paths = append(paths, p)
 			}
 		}
-		texts, err := lm.LoadCorpus(paths)
+		sources = []lm.CorpusSource{{
+			Name:          "local-corpus",
+			Kind:          "text",
+			Paths:         paths,
+			License:       "unreviewed-local",
+			LicenseReview: "paths supplied via --corpus; no external license review performed — do not redistribute the resulting model without reviewing source terms",
+			Dedup:         *dedup,
+			Filters:       []string{"utf8-valid", "size-caps", "sensitive-file-skip"},
+		}}
+	}
+	// Record the dedup strategy actually used on every source.
+	for i := range sources {
+		sources[i].Dedup = *dedup
+	}
+
+	model, err := lm.LoadCheckpoint(*checkpoint)
+	if err != nil {
+		return fmt.Errorf("load checkpoint tokenizer: %w", err)
+	}
+
+	shardTokens := int(*shardTokensFlag)
+	if shardTokens <= 0 {
+		shardTokens = 1 << 20 // 1M tokens per shard default
+	}
+	valDir := *outDir + "-val"
+	trainBuilder, err := lm.NewDatasetBuilder(*outDir, model.Tokenizer, shardTokens, *resume)
+	if err != nil {
+		return fmt.Errorf("open train dataset: %w", err)
+	}
+	var valBuilder *lm.DatasetBuilder
+	if *valFrac > 0 {
+		valBuilder, err = lm.NewDatasetBuilder(valDir, model.Tokenizer, shardTokens, *resume)
+		if err != nil {
+			return fmt.Errorf("open val dataset: %w", err)
+		}
+	}
+
+	var stats lm.IngestStats
+	seen := make(map[[32]byte]struct{})
+	var trainFeeds, valFeeds []lm.TokenFeed
+
+	for si := range sources {
+		src := &sources[si]
+		if err := src.Validate(); err != nil {
+			return fmt.Errorf("source %q: %w", src.Name, err)
+		}
+		if err := lm.HashSource(src); err != nil {
+			return fmt.Errorf("hash source %q: %w", src.Name, err)
+		}
+		if src.Kind == "tokendataset" {
+			if *valFrac > 0 {
+				return fmt.Errorf("source %q is a tokendataset; --val-frac requires text sources (use 'dataset split' for shard-level splits)", src.Name)
+			}
+			ds, err := lm.OpenDataset(src.Paths[0])
+			if err != nil {
+				return fmt.Errorf("source %q: %w", src.Name, err)
+			}
+			if ds.Meta.Tokenizer != lm.TokenizerFingerprint(model.Tokenizer) {
+				return fmt.Errorf("source %q tokenizer %q does not match checkpoint tokenizer %q", src.Name, ds.Meta.Tokenizer, lm.TokenizerFingerprint(model.Tokenizer))
+			}
+			trainFeeds = append(trainFeeds, lm.NewTokenStream(ds, lm.Sequential, 0))
+			stats.TokensTrain += ds.Meta.TotalTokens
+			stats.DocumentsIn += ds.Meta.TotalTokens // token-stream source: docs counted as tokens
+			stats.DocumentsKept += ds.Meta.TotalTokens
+			continue
+		}
+		texts, err := lm.LoadCorpus(src.Paths)
+		if err != nil {
+			return fmt.Errorf("source %q: %w", src.Name, err)
+		}
+		stats.DocumentsIn += int64(len(texts))
+		var trainToks, valToks []uint32
+		for _, text := range texts {
+			if *dedup == "exact" {
+				sum := sha256.Sum256([]byte(text))
+				if _, dup := seen[sum]; dup {
+					stats.DocumentsDup++
+					continue
+				}
+				seen[sum] = struct{}{}
+			}
+			stats.DocumentsKept++
+			ids := model.Tokenizer.Encode(text)
+			ids = append(ids, model.Tokenizer.Encode("\n")...)
+			if valBuilder != nil && docSplit(text, *valFrac) {
+				for _, id := range ids {
+					valToks = append(valToks, uint32(id))
+				}
+			} else {
+				for _, id := range ids {
+					trainToks = append(trainToks, uint32(id))
+				}
+			}
+		}
+		if len(trainToks) > 0 {
+			trainFeeds = append(trainFeeds, lm.NewSliceSource(trainToks))
+		}
+		if len(valToks) > 0 {
+			valFeeds = append(valFeeds, lm.NewSliceSource(valToks))
+		}
+	}
+
+	// Resume realignment: skip tokens already present in each builder.
+	trainChain := &chainFeed{feeds: trainFeeds}
+	if skip := trainBuilder.PendingSkip(); skip > 0 {
+		if err := lm.SkipFeed(trainChain, skip); err != nil {
+			return fmt.Errorf("resume skip (train): %w", err)
+		}
+	}
+	if err := trainBuilder.Consume(trainChain); err != nil {
+		return fmt.Errorf("build train dataset: %w", err)
+	}
+	if err := trainChain.Err(); err != nil {
+		return fmt.Errorf("train token feed: %w", err)
+	}
+	if valBuilder != nil {
+		valChain := &chainFeed{feeds: valFeeds}
+		if skip := valBuilder.PendingSkip(); skip > 0 {
+			if err := lm.SkipFeed(valChain, skip); err != nil {
+				return fmt.Errorf("resume skip (val): %w", err)
+			}
+		}
+		if err := valBuilder.Consume(valChain); err != nil {
+			return fmt.Errorf("build val dataset: %w", err)
+		}
+		if err := valChain.Err(); err != nil {
+			return fmt.Errorf("val token feed: %w", err)
+		}
+	}
+
+	trainMeta, err := trainBuilder.Close()
+	if err != nil {
+		return fmt.Errorf("finalize train dataset: %w", err)
+	}
+	stats.TokensTrain = trainMeta.TotalTokens
+	stats.TokensVal = 0
+	valProduced := false
+	if valBuilder != nil {
+		valMeta, err := valBuilder.Close()
+		if err != nil {
+			return fmt.Errorf("finalize val dataset: %w", err)
+		}
+		if valMeta.ShardCount == 0 {
+			// No documents landed in validation (e.g. single-document
+			// corpus); drop the empty output rather than leave an
+			// unopenable manifest behind.
+			_ = os.RemoveAll(valDir)
+			valBuilder = nil
+		} else {
+			stats.TokensVal = valMeta.TotalTokens
+			valProduced = true
+		}
+	}
+
+	splitDesc := "none"
+	if valProduced {
+		splitDesc = fmt.Sprintf("document-hash val_frac=%.4f -> %s", *valFrac, valDir)
+	}
+	prov := lm.NewProvenance(sources, pipelineHash(), splitDesc, stats)
+	if err := lm.WriteProvenance(*outDir, prov); err != nil {
+		return fmt.Errorf("write provenance: %w", err)
+	}
+	if valBuilder != nil {
+		if err := lm.WriteProvenance(valDir, prov); err != nil {
+			return fmt.Errorf("write val provenance: %w", err)
+		}
+	}
+	fmt.Printf("wrote dataset to %s: %d shards, %d tokens, tokenizer %s\n",
+		*outDir, trainMeta.ShardCount, trainMeta.TotalTokens, trainMeta.Tokenizer)
+	if valBuilder != nil {
+		fmt.Printf("wrote validation dataset to %s: %d tokens\n", valDir, stats.TokensVal)
+	}
+	fmt.Printf("provenance: %d sources, %s\n", len(sources), lm.DedupReport(stats.DocumentsKept, stats.DocumentsDup))
+	return nil
+}
+
+func pipelineHash() string {
+	if out, err := exec.Command("git", "rev-parse", "--short", "HEAD").Output(); err == nil {
+		return strings.TrimSpace(string(out))
+	}
+	return "unknown"
+}
+
+func datasetReport(args []string) error {
+	flags := flag.NewFlagSet("dataset report", flag.ContinueOnError)
+	jsonOut := flags.Bool("json", false, "emit full JSON report")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 1 {
+		return fmt.Errorf("usage: m3tal-lm dataset report [--json] DIR")
+	}
+	rep, err := lm.ReportDataset(flags.Arg(0))
+	if err != nil {
+		return err
+	}
+	if *jsonOut {
+		data, err := json.MarshalIndent(rep, "", "  ")
 		if err != nil {
 			return err
 		}
+		fmt.Println(string(data))
+		return nil
+	}
+	fmt.Printf("dataset: %s\n", rep.Dir)
+	fmt.Printf("  id %s  tokenizer %s  dtype %s\n", rep.Meta.DatasetID, rep.Meta.Tokenizer, rep.Meta.DType)
+	fmt.Printf("  shards %d  tokens %d  bytes %d  finalized %v\n",
+		rep.Meta.ShardCount, rep.Meta.TotalTokens, rep.Bytes, rep.Meta.Finalized)
+	if rep.HasProv {
+		fmt.Printf("  provenance %s: %d sources\n", rep.Provenance.ManifestID, len(rep.Provenance.Sources))
+		for _, s := range rep.Provenance.Sources {
+			fmt.Printf("    - %s (%s) license=%s sha256=%s… bytes=%d\n",
+				s.Name, s.Kind, s.License, s.SHA256[:12], s.Bytes)
+		}
+		st := rep.Provenance.IngestStats
+		fmt.Printf("    docs in=%d kept=%d dup=%d tokens train=%d val=%d\n",
+			st.DocumentsIn, st.DocumentsKept, st.DocumentsDup, st.TokensTrain, st.TokensVal)
+	} else {
+		fmt.Println("  provenance: none")
+	}
+	return nil
+}
+
+func datasetVerify(args []string) error {
+	flags := flag.NewFlagSet("dataset verify", flag.ContinueOnError)
+	checkpoint := flags.String("checkpoint", "", "checkpoint providing the tokenizer for vocab/spot checks")
+	samples := flags.Int("samples", 100, "decode spot-check windows per shard")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 1 {
+		return fmt.Errorf("usage: m3tal-lm dataset verify [--checkpoint CKPT] [--samples N] DIR")
+	}
+	var tok *lm.Tokenizer
+	if *checkpoint != "" {
 		model, err := lm.LoadCheckpoint(*checkpoint)
 		if err != nil {
 			return fmt.Errorf("load checkpoint tokenizer: %w", err)
 		}
-		var tokens []uint32
-		for _, text := range texts {
-			for _, id := range model.Tokenizer.Encode(text) {
-				tokens = append(tokens, uint32(id))
-			}
-		}
-		source := lm.NewSliceSource(tokens)
-		shardTokens := int(*shardTokensFlag)
-		if shardTokens <= 0 {
-			shardTokens = len(tokens)
-		}
-		meta, err := lm.BuildDataset(*outDir, source, model.Tokenizer, shardTokens)
-		if err != nil {
-			return fmt.Errorf("build dataset: %w", err)
-		}
-		fmt.Printf("wrote dataset to %s: %d shards, %d tokens, tokenizer %s\n",
-			*outDir, meta.ShardCount, meta.TotalTokens, meta.Tokenizer)
-		return nil
-	default:
-		return fmt.Errorf("unknown dataset subcommand %q; use build", args[0])
+		tok = model.Tokenizer
 	}
+	rep, err := lm.VerifyDataset(flags.Arg(0), tok, *samples)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("verify %s: %d shards OK, %d tokens", rep.Dir, rep.ShardsOK, rep.TokensOK)
+	if rep.VocabChecked {
+		fmt.Printf(", vocab %d", rep.VocabSize)
+		if rep.BadTokens > 0 {
+			fmt.Printf(", %d OUT-OF-VOCAB TOKENS", rep.BadTokens)
+		} else {
+			fmt.Print(", all tokens in vocab")
+		}
+	}
+	if rep.Samples > 0 {
+		fmt.Printf(", %d decode samples printable=%.4f", rep.Samples, rep.Printable)
+	}
+	fmt.Println()
+	if rep.BadTokens > 0 {
+		return fmt.Errorf("%d tokens outside vocabulary", rep.BadTokens)
+	}
+	return nil
+}
+
+func datasetSplit(args []string) error {
+	flags := flag.NewFlagSet("dataset split", flag.ContinueOnError)
+	valShards := flags.Int("val-shards", 0, "number of trailing shards to hold out")
+	valOut := flags.String("val-out", "", "output validation dataset directory")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 1 || *valShards <= 0 || strings.TrimSpace(*valOut) == "" {
+		return fmt.Errorf("usage: m3tal-lm dataset split --val-shards K --val-out DIR SRCDIR")
+	}
+	res, err := lm.SplitDataset(flags.Arg(0), *valOut, *valShards)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("split %s: train %d shards, val %d shards (%d tokens) -> %s\n",
+		res.TrainDir, res.TrainShard, res.ValShard, res.ValTokens, res.ValDir)
+	return nil
+}
+
+// datasetAnnotate writes a provenance manifest into an existing dataset
+// directory without rebuilding it — used for datasets produced before the
+// provenance pipeline existed.
+func datasetAnnotate(args []string) error {
+	flags := flag.NewFlagSet("dataset annotate", flag.ContinueOnError)
+	sourcesFile := flags.String("sources", "", "JSON file listing licensed corpus sources")
+	splitDesc := flags.String("split", "", "train/validation split description")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 1 || strings.TrimSpace(*sourcesFile) == "" {
+		return fmt.Errorf("usage: m3tal-lm dataset annotate --sources FILE DIR [--split DESC]")
+	}
+	sources, err := lm.LoadSources(*sourcesFile)
+	if err != nil {
+		return err
+	}
+	for i := range sources {
+		if err := lm.HashSource(&sources[i]); err != nil {
+			return fmt.Errorf("hash source %q: %w", sources[i].Name, err)
+		}
+	}
+	d, err := lm.OpenDataset(flags.Arg(0))
+	if err != nil {
+		return err
+	}
+	stats := lm.IngestStats{TokensTrain: d.Meta.TotalTokens}
+	prov := lm.NewProvenance(sources, pipelineHash(), *splitDesc, stats)
+	if err := lm.WriteProvenance(flags.Arg(0), prov); err != nil {
+		return err
+	}
+	fmt.Printf("wrote provenance %s to %s (%d sources)\n", prov.ManifestID, flags.Arg(0), len(sources))
+	return nil
 }

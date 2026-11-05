@@ -1,0 +1,14 @@
+[
+  {
+    "name": "tinystories",
+    "kind": "tokendataset",
+    "paths": ["data/tinystories-ds"],
+    "license": "CDLA-Sharing-1.0",
+    "license_review": "TinyStories corpus (Eldan & Li, 2023), distributed under CDLA-Sharing-1.0. Reviewed 2026-11-05: share-alike terms permit training and redistribution of derivatives provided attribution and share-alike notices are preserved; record attribution in model cards. Raw corpus text is not retained in this repository; this entry refers to the pre-tokenized shard dataset produced by 'dataset build' from a 7MB corpus sample (see STAGE0.md).",
+    "url": "https://huggingface.co/datasets/roneneldan/TinyStories",
+    "retrieved_unix": 1793868401,
+    "version": "dataset ds-1793868401219399005 (7 shards, 13,613,312 tokens, vocab-512 tokenizer)",
+    "filters": ["corpus-sample-7mb", "bpe-vocab-512", "shard-tokens-2000000"],
+    "dedup": "none"
+  }
+]

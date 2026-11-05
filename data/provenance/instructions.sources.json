@@ -1,0 +1,11 @@
+[
+  {
+    "name": "m3tal-instructions",
+    "kind": "text",
+    "paths": ["data/instructions.txt"],
+    "license": "self-owned",
+    "license_review": "Curated instruction examples authored for this project; no third-party text. Reviewed 2026-11-05: freely usable for training and redistribution.",
+    "filters": ["utf8-valid", "size-caps", "sensitive-file-skip"],
+    "dedup": "none"
+  }
+]

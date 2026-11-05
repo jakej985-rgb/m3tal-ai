@@ -58,6 +58,9 @@ type DatasetMeta struct {
 	TotalTokens int64  `json:"total_tokens"`
 	CreatedUnix int64  `json:"created_unix"`
 	DatasetID   string `json:"dataset_id"`
+	// Finalized is set when the builder completed cleanly. Absent/false
+	// means the dataset may be a partial build that can be resumed.
+	Finalized bool `json:"finalized,omitempty"`
 }
 
 type shardHeader struct {
