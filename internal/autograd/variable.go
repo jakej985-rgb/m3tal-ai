@@ -315,11 +315,6 @@ func (v *Variable) OnBackward(cb func() error) {
 	}
 }
 
-// FlatToIndices converts a flat linear element index into N-D coordinate indices.
-func FlatToIndices(flat int, shape []int) ([]int, error) {
-	return flatToIndices(flat, shape)
-}
-
 // flatToIndices converts a flat linear element index into N-D coordinate indices.
 func flatToIndices(flat int, shape []int) ([]int, error) {
 	if len(shape) == 0 {
