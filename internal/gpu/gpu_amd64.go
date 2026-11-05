@@ -60,6 +60,30 @@ int m3tal_launch_sum_f32(const void* src, void* out, long long n);
 int m3tal_launch_max_f32(const void* src, void* outKey, long long n);
 int m3tal_launch_sum_f64(const void* src, void* out, long long n);
 int m3tal_launch_max_f64(const void* src, void* out, long long n);
+
+// Transformer/lm kernels.
+int m3tal_launch_rmsnorm_f32(const void* x, const void* gamma, void* out,
+                             int rows, int width, float eps);
+int m3tal_launch_rope_batch_f32(void* q, void* k, int rows, int width,
+                                int headDim, int heads);
+int m3tal_launch_rope_single_f32(void* q, void* k, int pos, int width,
+                                 int headDim, int heads);
+int m3tal_launch_swiglu_f32(const void* gate, const void* up, void* out,
+                            long long n);
+int m3tal_launch_bias_add_f32(void* c, const void* bias, int M, int N);
+int m3tal_launch_embed_f32(const void* emb, const void* ids, void* out,
+                           int rows, int width);
+int m3tal_launch_attn_scores_f32(const void* q, const void* k, void* attn,
+                                 int heads, int qRows, int kvLen, int width,
+                                 int headDim, float scale, int causal);
+int m3tal_launch_attn_softmax_f32(void* attn, int heads, int qRows, int kvLen);
+int m3tal_launch_attn_weighted_f32(const void* attn, const void* v,
+                                   void* out, int heads, int qRows, int kvLen,
+                                   int width, int headDim);
+
+static int m3tal_gpu_memcpy_d2d(void* d, const void* s, size_t n) {
+	return (int)cudaMemcpy(d, s, n, cudaMemcpyDeviceToDevice);
+}
 */
 import "C"
 
@@ -192,6 +216,14 @@ func (b *Buffer) UploadF64(src []float64) error {
 	return b.upload(unsafe.Pointer(&src[0]), len(src)*8, "float64")
 }
 
+// UploadBytes copies raw host bytes into the buffer (e.g. int32 ids).
+func (b *Buffer) UploadBytes(src []byte) error {
+	if len(src) == 0 {
+		return nil
+	}
+	return b.upload(unsafe.Pointer(&src[0]), len(src), "bytes")
+}
+
 func (b *Buffer) upload(h unsafe.Pointer, n int, what string) error {
 	if b == nil || b.freed || b.ptr == nil {
 		return fmt.Errorf("%w: upload into freed/empty %s buffer", ErrUnavailable, what)
@@ -247,6 +279,25 @@ func Sync() error {
 	return cudaErr(C.m3tal_gpu_sync(), "device synchronize")
 }
 
+// DevicePointer exposes the raw device pointer for advanced callers that
+// need pointer arithmetic (e.g. offset copies). Prefer the typed helpers.
+func (b *Buffer) DevicePointer() unsafe.Pointer { return b.ptr }
+
+// MemcpyD2D copies n bytes between two device buffers; dstOff/srcOff are
+// byte offsets into each buffer (used for appending to growable caches).
+func MemcpyD2D(dst *Buffer, dstOff int, src *Buffer, srcOff int, n int) error {
+	if dst == nil || src == nil || dst.freed || src.freed {
+		return fmt.Errorf("%w: d2d copy on freed/empty buffer", ErrUnavailable)
+	}
+	d := unsafe.Pointer(uintptr(dst.ptr) + uintptr(dstOff))
+	s := unsafe.Pointer(uintptr(src.ptr) + uintptr(srcOff))
+	if err := cudaErr(C.m3tal_gpu_memcpy_d2d(d, s, C.size_t(n)), "D2D memcpy"); err != nil {
+		recordErr(err)
+		return err
+	}
+	return nil
+}
+
 // launch checks the launcher's return code and records failures.
 func launch(code C.int, what string) error {
 	if err := cudaErr(code, what); err != nil {
@@ -269,14 +320,6 @@ func GemmF32(A, B, Out *Buffer, M, N, K int) error {
 func GemmF64(A, B, Out *Buffer, M, N, K int) error {
 	return launch(C.m3tal_launch_gemm_f64(A.ptr, B.ptr, Out.ptr, C.int(M), C.int(N), C.int(K)), "gemm_f64 launch")
 }
-
-// elemOp codes shared with kernels.cu.
-const (
-	opAdd = iota
-	opSub
-	opMul
-	opDiv
-)
 
 // ElemwiseF32 computes out[i] = a[i] OP b[i] on device buffers.
 func ElemwiseF32(op int, A, B, Out *Buffer, n int) error {
@@ -474,16 +517,16 @@ func elemwiseHost64(op int, a, b, out []float64) error {
 }
 
 // AddFloat32, SubFloat32, MulFloat32, DivFloat32 compute out=a OP b on host slices.
-func AddFloat32(a, b, out []float32) error { return elemwiseHost(opAdd, a, b, out) }
-func SubFloat32(a, b, out []float32) error { return elemwiseHost(opSub, a, b, out) }
-func MulFloat32(a, b, out []float32) error { return elemwiseHost(opMul, a, b, out) }
-func DivFloat32(a, b, out []float32) error { return elemwiseHost(opDiv, a, b, out) }
+func AddFloat32(a, b, out []float32) error { return elemwiseHost(OpAdd, a, b, out) }
+func SubFloat32(a, b, out []float32) error { return elemwiseHost(OpSub, a, b, out) }
+func MulFloat32(a, b, out []float32) error { return elemwiseHost(OpMul, a, b, out) }
+func DivFloat32(a, b, out []float32) error { return elemwiseHost(OpDiv, a, b, out) }
 
 // AddFloat64, SubFloat64, MulFloat64, DivFloat64 compute out=a OP b on host slices.
-func AddFloat64(a, b, out []float64) error { return elemwiseHost64(opAdd, a, b, out) }
-func SubFloat64(a, b, out []float64) error { return elemwiseHost64(opSub, a, b, out) }
-func MulFloat64(a, b, out []float64) error { return elemwiseHost64(opMul, a, b, out) }
-func DivFloat64(a, b, out []float64) error { return elemwiseHost64(opDiv, a, b, out) }
+func AddFloat64(a, b, out []float64) error { return elemwiseHost64(OpAdd, a, b, out) }
+func SubFloat64(a, b, out []float64) error { return elemwiseHost64(OpSub, a, b, out) }
+func MulFloat64(a, b, out []float64) error { return elemwiseHost64(OpMul, a, b, out) }
+func DivFloat64(a, b, out []float64) error { return elemwiseHost64(OpDiv, a, b, out) }
 
 // ScaleFloat32 computes out[i] = src[i] * alpha on host slices.
 func ScaleFloat32(src []float32, alpha float32, out []float32) error {
@@ -645,4 +688,70 @@ func MaxFloat64(src []float64) (float64, error) {
 		return 0, err
 	}
 	return out[0], nil
+}
+
+// ---------------------------------------------------------------------------
+// Device-resident transformer/lm primitives (all float32).
+// ---------------------------------------------------------------------------
+
+// RMSNormF32 computes out = rmsnorm(x, gamma) for `rows` rows of `width`.
+func RMSNormF32(x, gamma, out *Buffer, rows, width int, eps float32) error {
+	return launch(C.m3tal_launch_rmsnorm_f32(x.ptr, gamma.ptr, out.ptr,
+		C.int(rows), C.int(width), C.float(eps)), "rmsnorm_f32 launch")
+}
+
+// RoPEBatchF32 applies rotary embeddings to q,k in place for `rows` rows.
+func RoPEBatchF32(q, k *Buffer, rows, width, headDim, heads int) error {
+	return launch(C.m3tal_launch_rope_batch_f32(q.ptr, k.ptr,
+		C.int(rows), C.int(width), C.int(headDim), C.int(heads)), "rope_batch launch")
+}
+
+// RoPESingleF32 applies rotary embeddings to a single row at position pos.
+func RoPESingleF32(q, k *Buffer, pos, width, headDim, heads int) error {
+	return launch(C.m3tal_launch_rope_single_f32(q.ptr, k.ptr, C.int(pos),
+		C.int(width), C.int(headDim), C.int(heads)), "rope_single launch")
+}
+
+// SwiGLUF32 computes out[i] = silu(gate[i]) * up[i].
+func SwiGLUF32(gate, up, out *Buffer, n int) error {
+	return launch(C.m3tal_launch_swiglu_f32(gate.ptr, up.ptr, out.ptr,
+		C.longlong(n)), "swiglu launch")
+}
+
+// BiasAddF32 adds bias[j] to every row of C[M,N] in place.
+func BiasAddF32(c, bias *Buffer, M, N int) error {
+	return launch(C.m3tal_launch_bias_add_f32(c.ptr, bias.ptr,
+		C.int(M), C.int(N)), "bias_add launch")
+}
+
+// EmbedF32 gathers rows: out[r,:] = emb[ids[r],:]. ids is an int32 buffer.
+func EmbedF32(emb, ids, out *Buffer, rows, width int) error {
+	return launch(C.m3tal_launch_embed_f32(emb.ptr, ids.ptr, out.ptr,
+		C.int(rows), C.int(width)), "embed launch")
+}
+
+// AttnScoresF32 computes raw attention scores into attn[heads,qRows,kvLen].
+// causal=1 masks j>i (batch prefill); causal=0 attends to all kvLen (decode).
+func AttnScoresF32(q, k, attn *Buffer, heads, qRows, kvLen, width, headDim int,
+	scale float32, causal bool) error {
+	c := C.int(0)
+	if causal {
+		c = 1
+	}
+	return launch(C.m3tal_launch_attn_scores_f32(q.ptr, k.ptr, attn.ptr,
+		C.int(heads), C.int(qRows), C.int(kvLen), C.int(width), C.int(headDim),
+		C.float(scale), c), "attn_scores launch")
+}
+
+// AttnSoftmaxF32 normalizes each (head,row) attention row in place.
+func AttnSoftmaxF32(attn *Buffer, heads, qRows, kvLen int) error {
+	return launch(C.m3tal_launch_attn_softmax_f32(attn.ptr,
+		C.int(heads), C.int(qRows), C.int(kvLen)), "attn_softmax launch")
+}
+
+// AttnWeightedF32 computes out = attn @ V per head into [qRows,width].
+func AttnWeightedF32(attn, v, out *Buffer, heads, qRows, kvLen, width, headDim int) error {
+	return launch(C.m3tal_launch_attn_weighted_f32(attn.ptr, v.ptr, out.ptr,
+		C.int(heads), C.int(qRows), C.int(kvLen), C.int(width), C.int(headDim)),
+		"attn_weighted launch")
 }

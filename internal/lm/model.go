@@ -660,6 +660,7 @@ func (m *Model) GenerateWithOptions(prompt string, opts GenerateOptions) (string
 	// holds the next-token prediction for the last prompt position.
 	m.Config.Normalize()
 	kvCache := backend.NewKVCache()
+	defer kvCache.Free()
 	var rawLogits []float32
 	for i, id := range ids {
 		rawLogits = backend.ForwardStepKV(id, i, kvCache)
@@ -749,7 +750,7 @@ func (m *Model) Generate(prompt string, maxTokens int, temperature float64, seed
 
 func (m *Model) inferenceBackend() inferenceBackend {
 	if m.backend == nil {
-		m.backend = newCPUInferenceBackend(m)
+		m.backend = newInferenceBackend(m)
 	}
 	return m.backend
 }

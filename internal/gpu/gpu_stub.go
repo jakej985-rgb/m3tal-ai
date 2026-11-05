@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"unsafe"
 )
 
 // ErrUnavailable is returned when CUDA support is not compiled in or no
@@ -58,6 +59,9 @@ func (b *Buffer) Upload(src []float32) error { return b.check("upload") }
 // UploadF64 copies a host float64 slice into the buffer.
 func (b *Buffer) UploadF64(src []float64) error { return b.check("upload") }
 
+// UploadBytes copies raw host bytes into the buffer.
+func (b *Buffer) UploadBytes(src []byte) error { return b.check("upload") }
+
 // Download copies the buffer contents into a host float32 slice.
 func (b *Buffer) Download(dst []float32) error { return b.check("download") }
 
@@ -66,6 +70,9 @@ func (b *Buffer) DownloadF64(dst []float64) error { return b.check("download") }
 
 // Zero fills the buffer with zero bytes.
 func (b *Buffer) Zero() error { return b.check("zero") }
+
+// DevicePointer exposes the raw device pointer (always nil on stubs).
+func (b *Buffer) DevicePointer() unsafe.Pointer { return nil }
 
 // DeviceInfo describes the primary CUDA device (stub builds never have one).
 type DeviceInfo struct {
@@ -193,3 +200,50 @@ func SumFloat64(src []float64) (float64, error) { return 0, unavail("sum_f64") }
 
 // MaxFloat64 reduces a host float64 slice on the GPU.
 func MaxFloat64(src []float64) (float64, error) { return 0, unavail("max_f64") }
+
+// MemcpyD2D copies bytes between device buffers (stub).
+func MemcpyD2D(dst *Buffer, dstOff int, src *Buffer, srcOff int, n int) error {
+	return unavail("d2d memcpy")
+}
+
+// RMSNormF32 stub.
+func RMSNormF32(x, gamma, out *Buffer, rows, width int, eps float32) error {
+	return unavail("rmsnorm_f32")
+}
+
+// RoPEBatchF32 stub.
+func RoPEBatchF32(q, k *Buffer, rows, width, headDim, heads int) error {
+	return unavail("rope_batch")
+}
+
+// RoPESingleF32 stub.
+func RoPESingleF32(q, k *Buffer, pos, width, headDim, heads int) error {
+	return unavail("rope_single")
+}
+
+// SwiGLUF32 stub.
+func SwiGLUF32(gate, up, out *Buffer, n int) error { return unavail("swiglu") }
+
+// BiasAddF32 stub.
+func BiasAddF32(c, bias *Buffer, M, N int) error { return unavail("bias_add") }
+
+// EmbedF32 stub.
+func EmbedF32(emb, ids, out *Buffer, rows, width int) error {
+	return unavail("embed")
+}
+
+// AttnScoresF32 stub.
+func AttnScoresF32(q, k, attn *Buffer, heads, qRows, kvLen, width, headDim int,
+	scale float32, causal bool) error {
+	return unavail("attn_scores")
+}
+
+// AttnSoftmaxF32 stub.
+func AttnSoftmaxF32(attn *Buffer, heads, qRows, kvLen int) error {
+	return unavail("attn_softmax")
+}
+
+// AttnWeightedF32 stub.
+func AttnWeightedF32(attn, v, out *Buffer, heads, qRows, kvLen, width, headDim int) error {
+	return unavail("attn_weighted")
+}

@@ -77,3 +77,48 @@ To exercise the CUDA path locally:
 CGO_ENABLED=1 go test -tags cuda ./internal/tensor/kernel/ -v
 M3TAL_LLM_BACKEND=cuda go run ./cmd/m3tal-lm generate --checkpoint models/m3tal-small.json --prompt "M3TAL is"
 ```
+
+## Implemented kernels
+
+`internal/gpu/kernels.cu` provides CUDA kernels for the hot paths used by
+the transformer and LM inference stacks; Go wrappers live in
+`internal/gpu` and dispatch through `internal/tensor/kernel`:
+
+- GEMM (float32 and float64), elementwise add/sub/mul/div, scale.
+- Sum/max reductions.
+- Embedding gather, RoPE, RMSNorm.
+- Fused attention forward (QK^T scores, softmax, PV) used by the CUDA
+  inference backend in `internal/lm`.
+
+Operations without a CUDA kernel fall back to the CPU implementation for
+that call, so coverage grows incrementally without breaking correctness.
+
+## Numerics and precision
+
+- Kernels accumulate float32 GEMMs in float32 (no float64 promotion), so
+  CUDA float32 results differ from the CPU path only by reduction order —
+  typically ~1e-6 relative on well-conditioned inputs. Parity tests use
+  tolerances of 1e-4 (float32) and 1e-9 (float64).
+- Float64 tensors run through dedicated float64 kernels with the same
+  tolerance discipline as CPU.
+- There is no mixed-precision (fp16/bf16) path today. Activation and
+  gradient tensors stay in their declared dtype end-to-end; introducing
+  fp16 would require explicit cast points and is a future optimization,
+  not silent downcasting.
+- Reductions use atomic adds, so GPU sums are not bitwise deterministic
+  run-to-run; magnitudes stay well inside the parity tolerances.
+- Numerical-stability behavior (RMSNorm epsilon, softmax max-subtraction)
+  matches the CPU reference implementations kernel-for-kernel.
+
+## Benchmarks
+
+`internal/tensor/kernel` contains paired CPU/CUDA benchmarks that measure
+the full dispatch path (host→device transfer, kernel, device→host), not
+just the kernel launch:
+
+```sh
+CGO_ENABLED=1 go test -tags cuda -bench 'CUDA|CPU' -benchmem ./internal/tensor/kernel/
+```
+
+On a GTX 960 (Maxwell, sm_52) a representative float32 GEMM measures
+~2.5 ms/op end-to-end on CUDA vs ~287 ms/op on the scalar CPU fallback.

@@ -304,6 +304,226 @@ __global__ void max_f64_kernel(const double* __restrict__ src,
 }
 
 // ---------------------------------------------------------------------------
+// RMSNorm (forward): out[r,c] = gamma[c] * x[r,c] / sqrt(mean(x[r,:]^2)+eps)
+// One thread block per row.
+// ---------------------------------------------------------------------------
+
+__global__ void rmsnorm_f32_kernel(const float* __restrict__ x,
+                                   const float* __restrict__ gamma,
+                                   float* __restrict__ out,
+                                   int rows, int width, float eps) {
+    int row = blockIdx.x;
+    if (row >= rows) return;
+    const float* xr = x + (long long)row * width;
+    float* orow = out + (long long)row * width;
+
+    float ss = 0.0f;
+    for (int d = threadIdx.x; d < width; d += blockDim.x) {
+        float v = xr[d];
+        ss += v * v;
+    }
+    SumOpF32 sop;
+    float total = block_reduce(ss, sop);
+    __shared__ float rmsS;
+    if (threadIdx.x == 0) {
+        rmsS = 1.0f / sqrtf(total / (float)width + eps);
+    }
+    __syncthreads();
+    float r = rmsS;
+    for (int d = threadIdx.x; d < width; d += blockDim.x) {
+        orow[d] = gamma[d] * xr[d] * r;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// RoPE (forward): rotate interleaved (2d, 2d+1) pairs per (row, head).
+// batch variant uses pos = row; single variant uses a fixed position.
+// ---------------------------------------------------------------------------
+
+__device__ __forceinline__ void rope_apply(float* q, float* k, int width,
+                                           int headDim, int h, int d,
+                                           float c, float s) {
+    int base = h * headDim + 2 * d;
+    float q0 = q[base], q1 = q[base + 1];
+    q[base]     = q0 * c - q1 * s;
+    q[base + 1] = q0 * s + q1 * c;
+    float k0 = k[base], k1 = k[base + 1];
+    k[base]     = k0 * c - k1 * s;
+    k[base + 1] = k0 * s + k1 * c;
+}
+
+__device__ __forceinline__ void rope_pair(float* qrow, float* krow, int width,
+                                          int headDim, int heads, int row,
+                                          float pos) {
+    int half = headDim / 2;
+    long long total = (long long)heads * half;
+    for (long long idx = (long long)blockIdx.x * blockDim.x + threadIdx.x;
+         idx < total; idx += (long long)gridDim.x * blockDim.x) {
+        int d = (int)(idx % half);
+        int t = (int)(idx / half);
+        int h = t % heads;
+        (void)row;
+        float theta = powf(10000.0f, -2.0f * (float)d / (float)headDim);
+        float ang = pos * theta;
+        rope_apply(qrow + (long long)row * width,
+                   krow + (long long)row * width,
+                   width, headDim, h, d, cosf(ang), sinf(ang));
+    }
+}
+
+__global__ void rope_batch_f32_kernel(float* q, float* k, int rows,
+                                      int width, int headDim, int heads) {
+    for (int row = blockIdx.y; row < rows; row += gridDim.y) {
+        rope_pair(q, k, width, headDim, heads, row, (float)row);
+    }
+}
+
+__global__ void rope_single_f32_kernel(float* q, float* k, int pos,
+                                       int width, int headDim, int heads) {
+    rope_pair(q, k, width, headDim, heads, 0, (float)pos);
+}
+
+// ---------------------------------------------------------------------------
+// SwiGLU: out[i] = silu(gate[i]) * up[i], silu(z) = z * sigmoid(z)
+// ---------------------------------------------------------------------------
+
+__global__ void swiglu_f32_kernel(const float* __restrict__ gate,
+                                  const float* __restrict__ up,
+                                  float* __restrict__ out,
+                                  long long n) {
+    long long stride = (long long)gridDim.x * blockDim.x;
+    for (long long i = (long long)blockIdx.x * blockDim.x + threadIdx.x;
+         i < n; i += stride) {
+        float g = gate[i];
+        out[i] = (g / (1.0f + expf(-g))) * up[i];
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Bias add: C[m,n] += bias[n]  (C is [M,N] row-major)
+// ---------------------------------------------------------------------------
+
+__global__ void bias_add_f32_kernel(float* __restrict__ c,
+                                    const float* __restrict__ bias,
+                                    int M, int N) {
+    long long total = (long long)M * N;
+    long long stride = (long long)gridDim.x * blockDim.x;
+    for (long long i = (long long)blockIdx.x * blockDim.x + threadIdx.x;
+         i < total; i += stride) {
+        c[i] += bias[i % N];
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Embedding gather: out[r,:] = emb[ids[r],:]  (ids are int32 on device)
+// ---------------------------------------------------------------------------
+
+__global__ void embed_f32_kernel(const float* __restrict__ emb,
+                                 const int* __restrict__ ids,
+                                 float* __restrict__ out,
+                                 int rows, int width) {
+    long long total = (long long)rows * width;
+    long long stride = (long long)gridDim.x * blockDim.x;
+    for (long long i = (long long)blockIdx.x * blockDim.x + threadIdx.x;
+         i < total; i += stride) {
+        int r = (int)(i / width);
+        out[i] = emb[(long long)ids[r] * width + (i % width)];
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Causal multi-head attention (forward), three-kernel formulation matching
+// the CPU reference: scores -> softmax -> weighted sum of V.
+//   q:   [qRows, width]      (post-RoPE queries)
+//   k:   [kvLen, width]      (post-RoPE keys; kvLen >= qRows for batch)
+//   v:   [kvLen, width]
+//   attn: [heads, qRows, kvLen] scratch, overwritten with probabilities
+//   out: [qRows, width]
+// ---------------------------------------------------------------------------
+
+__global__ void attn_scores_f32_kernel(const float* __restrict__ q,
+                                       const float* __restrict__ k,
+                                       float* __restrict__ attn,
+                                       int heads, int qRows, int kvLen,
+                                       int width, int headDim,
+                                       float scale, int causal) {
+    int idx = blockIdx.x;  // h * qRows + i
+    int h = idx / qRows;
+    int i = idx % qRows;
+    const float* qrow = q + (long long)i * width + h * headDim;
+    float* aout = attn + ((long long)h * qRows + i) * kvLen;
+
+    for (int j = threadIdx.x; j < kvLen; j += blockDim.x) {
+        if (causal && j > i) {
+            aout[j] = -CUDART_INF_F;
+            continue;
+        }
+        const float* krow = k + (long long)j * width + h * headDim;
+        float s = 0.0f;
+        for (int d = 0; d < headDim; d++) {
+            s += qrow[d] * krow[d];
+        }
+        aout[j] = s * scale;
+    }
+}
+
+__global__ void attn_softmax_f32_kernel(float* __restrict__ attn,
+                                        int heads, int qRows, int kvLen) {
+    int idx = blockIdx.x;
+    float* a = attn + (long long)idx * kvLen;
+
+    float mx = -CUDART_INF_F;
+    for (int j = threadIdx.x; j < kvLen; j += blockDim.x) {
+        mx = fmaxf(mx, a[j]);
+    }
+    MaxOpF32 mop;
+    float m = block_reduce(mx, mop);
+    __shared__ float ms;
+    __syncthreads();
+    if (threadIdx.x == 0) ms = m;
+    __syncthreads();
+    m = ms;
+
+    float sum = 0.0f;
+    for (int j = threadIdx.x; j < kvLen; j += blockDim.x) {
+        float e = expf(a[j] - m);
+        a[j] = e;
+        sum += e;
+    }
+    SumOpF32 sop;
+    float z = block_reduce(sum, sop);
+    __shared__ float zs;
+    __syncthreads();
+    if (threadIdx.x == 0) zs = z;
+    __syncthreads();
+    z = zs;
+
+    for (int j = threadIdx.x; j < kvLen; j += blockDim.x) {
+        a[j] /= z;
+    }
+}
+
+__global__ void attn_weighted_f32_kernel(const float* __restrict__ attn,
+                                         const float* __restrict__ v,
+                                         float* __restrict__ out,
+                                         int heads, int qRows, int kvLen,
+                                         int width, int headDim) {
+    int idx = blockIdx.x;  // h * qRows + i
+    int h = idx / qRows;
+    int i = idx % qRows;
+    const float* arow = attn + (long long)idx * kvLen;
+    float* orow = out + (long long)i * width + h * headDim;
+
+    for (int d = threadIdx.x; d < headDim; d += blockDim.x) {
+        float s = 0.0f;
+        for (int j = 0; j < kvLen; j++) {
+            s += arow[j] * v[(long long)j * width + h * headDim + d];
+        }
+        orow[d] = s;
+    }
+}
+
+// ---------------------------------------------------------------------------
 // extern "C" launchers: compute grid size, launch on stream 0, return the
 // immediate cudaError_t so Go can detect launch-configuration errors.
 // Device pointers are CUdeviceptr-sized (void* works via casts below).
@@ -392,5 +612,94 @@ extern "C" int m3tal_launch_sum_f64(const void* src, void* out, long long n) {
 extern "C" int m3tal_launch_max_f64(const void* src, void* out, long long n) {
     if (n <= 0) return 0;
     max_f64_kernel<<<1, GPU_BLOCK>>>((const double*)src, (double*)out, n);
+    return (int)cudaGetLastError();
+}
+
+extern "C" int m3tal_launch_rmsnorm_f32(const void* x, const void* gamma,
+                                        void* out, int rows, int width,
+                                        float eps) {
+    if (rows <= 0 || width <= 0) return 0;
+    rmsnorm_f32_kernel<<<rows, GPU_BLOCK>>>(
+        (const float*)x, (const float*)gamma, (float*)out, rows, width, eps);
+    return (int)cudaGetLastError();
+}
+
+extern "C" int m3tal_launch_rope_batch_f32(void* q, void* k, int rows,
+                                           int width, int headDim, int heads) {
+    if (rows <= 0 || width <= 0) return 0;
+    int half = headDim / 2;
+    long long total = (long long)rows * heads * half;
+    dim3 grid((unsigned)gpu_grid_1d(total, GPU_BLOCK).x, (unsigned)rows);
+    rope_batch_f32_kernel<<<grid, GPU_BLOCK>>>(
+        (float*)q, (float*)k, rows, width, headDim, heads);
+    return (int)cudaGetLastError();
+}
+
+extern "C" int m3tal_launch_rope_single_f32(void* q, void* k, int pos,
+                                            int width, int headDim, int heads) {
+    if (width <= 0) return 0;
+    int half = headDim / 2;
+    long long total = (long long)heads * half;
+    dim3 grid = gpu_grid_1d(total, GPU_BLOCK);
+    rope_single_f32_kernel<<<grid, GPU_BLOCK>>>(
+        (float*)q, (float*)k, pos, width, headDim, heads);
+    return (int)cudaGetLastError();
+}
+
+extern "C" int m3tal_launch_swiglu_f32(const void* gate, const void* up,
+                                       void* out, long long n) {
+    if (n <= 0) return 0;
+    dim3 grid = gpu_grid_1d(n, GPU_BLOCK);
+    swiglu_f32_kernel<<<grid, GPU_BLOCK>>>(
+        (const float*)gate, (const float*)up, (float*)out, n);
+    return (int)cudaGetLastError();
+}
+
+extern "C" int m3tal_launch_bias_add_f32(void* c, const void* bias,
+                                         int M, int N) {
+    long long total = (long long)M * N;
+    if (total <= 0) return 0;
+    dim3 grid = gpu_grid_1d(total, GPU_BLOCK);
+    bias_add_f32_kernel<<<grid, GPU_BLOCK>>>((float*)c, (const float*)bias, M, N);
+    return (int)cudaGetLastError();
+}
+
+extern "C" int m3tal_launch_embed_f32(const void* emb, const void* ids,
+                                      void* out, int rows, int width) {
+    long long total = (long long)rows * width;
+    if (total <= 0) return 0;
+    dim3 grid = gpu_grid_1d(total, GPU_BLOCK);
+    embed_f32_kernel<<<grid, GPU_BLOCK>>>(
+        (const float*)emb, (const int*)ids, (float*)out, rows, width);
+    return (int)cudaGetLastError();
+}
+
+extern "C" int m3tal_launch_attn_scores_f32(const void* q, const void* k,
+                                           void* attn, int heads, int qRows,
+                                           int kvLen, int width, int headDim,
+                                           float scale, int causal) {
+    if (heads <= 0 || qRows <= 0 || kvLen <= 0) return 0;
+    attn_scores_f32_kernel<<<heads * qRows, GPU_BLOCK>>>(
+        (const float*)q, (const float*)k, (float*)attn,
+        heads, qRows, kvLen, width, headDim, scale, causal);
+    return (int)cudaGetLastError();
+}
+
+extern "C" int m3tal_launch_attn_softmax_f32(void* attn, int heads,
+                                             int qRows, int kvLen) {
+    if (heads <= 0 || qRows <= 0 || kvLen <= 0) return 0;
+    attn_softmax_f32_kernel<<<heads * qRows, GPU_BLOCK>>>(
+        (float*)attn, heads, qRows, kvLen);
+    return (int)cudaGetLastError();
+}
+
+extern "C" int m3tal_launch_attn_weighted_f32(const void* attn,
+                                              const void* v, void* out,
+                                              int heads, int qRows, int kvLen,
+                                              int width, int headDim) {
+    if (heads <= 0 || qRows <= 0 || kvLen <= 0) return 0;
+    attn_weighted_f32_kernel<<<heads * qRows, GPU_BLOCK>>>(
+        (const float*)attn, (const float*)v, (float*)out,
+        heads, qRows, kvLen, width, headDim);
     return (int)cudaGetLastError();
 }

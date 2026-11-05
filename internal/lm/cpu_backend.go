@@ -1,6 +1,10 @@
 package lm
 
-import "math"
+import (
+	"math"
+
+	"m3tal-llm/internal/gpu"
+)
 
 type inferenceLayer struct {
 	weights []float32 // row-major [inputSize, outputSize]
@@ -55,11 +59,33 @@ type forwardCache struct {
 type kvLayerCache struct {
 	k []float32 // row-major [pastTokens, width]
 	v []float32 // row-major [pastTokens, width]
+	// Device-resident K/V used by the CUDA inference backend (nil on CPU).
+	// The host slices above are always kept in sync so the CPU fallback
+	// path remains correct if a GPU step fails.
+	dk *gpu.Buffer
+	dv *gpu.Buffer
 }
 
 // kvCache stores state across all decoder layers for O(1) token-by-token generation.
 type kvCache struct {
 	layers []kvLayerCache
+	// cpuOnly is set by the CUDA backend when a GPU step fails, forcing all
+	// subsequent steps onto the CPU path for this cache.
+	//lint:ignore U1000 only referenced under the cuda build tag
+	cpuOnly bool
+}
+
+// Free releases device resources held by the cache (CUDA backend KV
+// buffers). It is safe to call on CPU-only caches and multiple times.
+func (c *kvCache) Free() {
+	if c == nil {
+		return
+	}
+	for i := range c.layers {
+		c.layers[i].dk.Free()
+		c.layers[i].dv.Free()
+		c.layers[i].dk, c.layers[i].dv = nil, nil
+	}
 }
 
 // newKVCache creates an empty KV cache for the given number of layers.
