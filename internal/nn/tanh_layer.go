@@ -3,7 +3,7 @@ package nn
 import (
 	"fmt"
 
-	"m3tal-ai/internal/tensor"
+	"m3tal-llm/internal/tensor"
 )
 
 // TanhLayer applies the tanh activation element-wise and caches its output for

@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	"m3tal-ai/internal/tensor"
+	"m3tal-llm/internal/tensor"
 )
 
 func TestReLUForwardAndBackward(t *testing.T) {

@@ -74,55 +74,6 @@ func (t *Tensor) Neg() (*Tensor, error) {
 	return out, nil
 }
 
-// Scale multiplies each element of the tensor by a scalar value.
-func (t *Tensor) Scale(scalar float64) (*Tensor, error) {
-	if !t.device.IsCPU() {
-		return nil, fmt.Errorf("%w: Scale only supported on CPU", ErrUnsupportedDevice)
-	}
-	out, err := New(t.shape, t.dtype)
-	if err != nil {
-		return nil, err
-	}
-	numel := t.Numel()
-	if numel == 0 {
-		return out, nil
-	}
-
-	indices := make([]int, len(t.shape))
-	dstBytes := out.storage.Bytes()
-	srcBytes := t.storage.Bytes()
-
-	switch t.dtype {
-	case Float32:
-		s32 := float32(scalar)
-		for i := 0; i < numel; i++ {
-			srcOff, err := ComputeOffset(indices, t.shape, t.strides, t.offset)
-			if err != nil {
-				return nil, err
-			}
-			bits := binary.LittleEndian.Uint32(srcBytes[srcOff*4 : (srcOff+1)*4])
-			val := math.Float32frombits(bits) * s32
-			binary.LittleEndian.PutUint32(dstBytes[i*4:(i+1)*4], math.Float32bits(val))
-			advanceIndices(indices, t.shape)
-		}
-	case Float64:
-		for i := 0; i < numel; i++ {
-			srcOff, err := ComputeOffset(indices, t.shape, t.strides, t.offset)
-			if err != nil {
-				return nil, err
-			}
-			bits := binary.LittleEndian.Uint64(srcBytes[srcOff*8 : (srcOff+1)*8])
-			val := math.Float64frombits(bits) * scalar
-			binary.LittleEndian.PutUint64(dstBytes[i*8:(i+1)*8], math.Float64bits(val))
-			advanceIndices(indices, t.shape)
-		}
-	default:
-		return nil, fmt.Errorf("%w: Scale not supported for dtype %s", ErrUnsupportedDType, t.dtype)
-	}
-
-	return out, nil
-}
-
 func elementwiseBinary(a, b *Tensor, opName string, op func(float64, float64) float64) (*Tensor, error) {
 	if a == nil || b == nil {
 		return nil, fmt.Errorf("%w: input tensor cannot be nil", ErrInvalidShape)

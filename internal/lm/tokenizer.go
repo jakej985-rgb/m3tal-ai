@@ -30,8 +30,8 @@ func TrainTokenizer(corpus []string, targetSize int) (*Tokenizer, error) {
 	if targetSize < 256 {
 		return nil, fmt.Errorf("tokenizer target size must be at least 256")
 	}
-	if targetSize > 2048 {
-		return nil, fmt.Errorf("tokenizer target size must not exceed 2048")
+	if targetSize > 4096 {
+		return nil, fmt.Errorf("tokenizer target size must not exceed 4096")
 	}
 	t := &Tokenizer{Tokens: make([]string, 256)}
 	known := make(map[string]bool, targetSize)

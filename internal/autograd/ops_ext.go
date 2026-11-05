@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"math"
 
-	"m3tal-ai/internal/tensor"
+	"m3tal-llm/internal/tensor"
 )
 
 // Tanh applies element-wise hyperbolic tangent: tanh(x).

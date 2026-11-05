@@ -13,9 +13,10 @@ type ParameterInfo struct {
 func (m *Model) ParametersInfo() []ParameterInfo {
 	var info []ParameterInfo
 	info = append(info, ParameterInfo{Name: "tokenEmb", Values: m.tokenEmb.values, Gradient: m.tokenEmb.gradient})
-	info = append(info, ParameterInfo{Name: "posEmb", Values: m.posEmb.values, Gradient: m.posEmb.gradient})
 	for l, b := range m.blocks {
 		prefix := fmt.Sprintf("block[%d].", l)
+		info = append(info, ParameterInfo{Name: prefix + "normAttn", Values: b.normAttn.values, Gradient: b.normAttn.gradient})
+		info = append(info, ParameterInfo{Name: prefix + "normFF", Values: b.normFF.values, Gradient: b.normFF.gradient})
 		info = append(info, ParameterInfo{Name: prefix + "query.weights", Values: b.query.weights.values, Gradient: b.query.weights.gradient})
 		info = append(info, ParameterInfo{Name: prefix + "query.bias", Values: b.query.bias.values, Gradient: b.query.bias.gradient})
 		info = append(info, ParameterInfo{Name: prefix + "key.weights", Values: b.key.weights.values, Gradient: b.key.weights.gradient})
@@ -24,10 +25,12 @@ func (m *Model) ParametersInfo() []ParameterInfo {
 		info = append(info, ParameterInfo{Name: prefix + "value.bias", Values: b.value.bias.values, Gradient: b.value.bias.gradient})
 		info = append(info, ParameterInfo{Name: prefix + "attnOut.weights", Values: b.attnOut.weights.values, Gradient: b.attnOut.weights.gradient})
 		info = append(info, ParameterInfo{Name: prefix + "attnOut.bias", Values: b.attnOut.bias.values, Gradient: b.attnOut.bias.gradient})
-		info = append(info, ParameterInfo{Name: prefix + "ffIn.weights", Values: b.ffIn.weights.values, Gradient: b.ffIn.weights.gradient})
-		info = append(info, ParameterInfo{Name: prefix + "ffIn.bias", Values: b.ffIn.bias.values, Gradient: b.ffIn.bias.gradient})
-		info = append(info, ParameterInfo{Name: prefix + "ffOut.weights", Values: b.ffOut.weights.values, Gradient: b.ffOut.weights.gradient})
-		info = append(info, ParameterInfo{Name: prefix + "ffOut.bias", Values: b.ffOut.bias.values, Gradient: b.ffOut.bias.gradient})
+		info = append(info, ParameterInfo{Name: prefix + "ffGate.weights", Values: b.ffGate.weights.values, Gradient: b.ffGate.weights.gradient})
+		info = append(info, ParameterInfo{Name: prefix + "ffGate.bias", Values: b.ffGate.bias.values, Gradient: b.ffGate.bias.gradient})
+		info = append(info, ParameterInfo{Name: prefix + "ffUp.weights", Values: b.ffUp.weights.values, Gradient: b.ffUp.weights.gradient})
+		info = append(info, ParameterInfo{Name: prefix + "ffUp.bias", Values: b.ffUp.bias.values, Gradient: b.ffUp.bias.gradient})
+		info = append(info, ParameterInfo{Name: prefix + "ffDown.weights", Values: b.ffDown.weights.values, Gradient: b.ffDown.weights.gradient})
+		info = append(info, ParameterInfo{Name: prefix + "ffDown.bias", Values: b.ffDown.bias.values, Gradient: b.ffDown.bias.gradient})
 	}
 	info = append(info, ParameterInfo{Name: "output.weights", Values: m.output.weights.values, Gradient: m.output.weights.gradient})
 	info = append(info, ParameterInfo{Name: "output.bias", Values: m.output.bias.values, Gradient: m.output.bias.gradient})

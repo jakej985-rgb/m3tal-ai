@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"math/rand"
 
-	"m3tal-ai/internal/nn"
-	"m3tal-ai/internal/tensor"
+	"m3tal-llm/internal/nn"
+	"m3tal-llm/internal/tensor"
 )
 
 func main() {

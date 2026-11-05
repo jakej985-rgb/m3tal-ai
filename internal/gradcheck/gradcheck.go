@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"math"
 
-	"m3tal-ai/internal/tensor"
+	"m3tal-llm/internal/tensor"
 )
 
 // Config configures finite-difference perturbation parameters and tolerances.

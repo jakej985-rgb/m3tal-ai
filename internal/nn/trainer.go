@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"math/rand"
 
-	"m3tal-ai/internal/tensor"
+	"m3tal-llm/internal/tensor"
 )
 
 // Trainer performs gradient-based training with optional mini-batches and
