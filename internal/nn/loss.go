@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"math"
 
-	"m3tal-ai/internal/tensor"
+	"m3tal-llm/internal/tensor"
 )
 
 // Loss computes a scalar objective and its gradient with respect to predictions.

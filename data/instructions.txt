@@ -1,68 +1,162 @@
-Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. User request: show stats and health
-PLAN: {"steps":[{"tool":"stats"},{"tool":"health"}]}
+Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. You may first write a brief Thought before the JSON. User request: show stats and health
+PLAN: Thought: The user wants both system stats and health metrics. First collect system stats, then inspect component health.
+{"steps":[{"tool":"stats"},{"tool":"health"}]}
 
-Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. User request: show stats then check containers
-PLAN: {"steps":[{"tool":"stats"},{"tool":"containers"}]}
+Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. You may first write a brief Thought before the JSON. User request: show stats then check containers
+PLAN: Thought: The user wants to inspect system resource statistics followed by the container list.
+{"steps":[{"tool":"stats"},{"tool":"containers"}]}
 
-Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. User request: show stats and health and containers
-PLAN: {"steps":[{"tool":"stats"},{"tool":"health"},{"tool":"containers"}]}
+Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. You may first write a brief Thought before the JSON. User request: show stats and health and containers
+PLAN: Thought: The user requests an overview of stats, health status, and active containers.
+{"steps":[{"tool":"stats"},{"tool":"health"},{"tool":"containers"}]}
 
-Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. User request: check health then show stats
-PLAN: {"steps":[{"tool":"health"},{"tool":"stats"}]}
+Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. You may first write a brief Thought before the JSON. User request: check health then show stats
+PLAN: Thought: The user wants to evaluate service health first and then review system resource usage.
+{"steps":[{"tool":"health"},{"tool":"stats"}]}
 
-Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. User request: list containers and check system stats
-PLAN: {"steps":[{"tool":"containers"},{"tool":"stats"}]}
+Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. You may first write a brief Thought before the JSON. User request: list containers and check system stats
+PLAN: Thought: The user wants container inventory first, followed by host resource statistics.
+{"steps":[{"tool":"containers"},{"tool":"stats"}]}
 
-Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. User request: show health and list containers
-PLAN: {"steps":[{"tool":"health"},{"tool":"containers"}]}
+Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. You may first write a brief Thought before the JSON. User request: show health and list containers
+PLAN: Thought: The user wants a health check followed by the container listing.
+{"steps":[{"tool":"health"},{"tool":"containers"}]}
 
-Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. User request: is jellyfin running
-PLAN: {"steps":[{"tool":"containers"}]}
+Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. You may first write a brief Thought before the JSON. User request: is jellyfin running
+PLAN: Thought: To determine whether jellyfin is running, inspect the active containers.
+{"steps":[{"tool":"containers"}]}
 
-Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. User request: status of jellyfin
-PLAN: {"steps":[{"tool":"containers"}]}
+Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. You may first write a brief Thought before the JSON. User request: status of jellyfin
+PLAN: Thought: The user is querying the status of the jellyfin container, so list containers.
+{"steps":[{"tool":"containers"}]}
 
-Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. User request: check container status
-PLAN: {"steps":[{"tool":"containers"}]}
+Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. You may first write a brief Thought before the JSON. User request: check container status
+PLAN: Thought: The user wants an overview of container states across the system.
+{"steps":[{"tool":"containers"}]}
 
-Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. User request: what containers are running
-PLAN: {"steps":[{"tool":"containers"}]}
+Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. You may first write a brief Thought before the JSON. User request: what containers are running
+PLAN: Thought: Query the container runtime to list all running containers.
+{"steps":[{"tool":"containers"}]}
 
-Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. User request: show containers then stats
-PLAN: {"steps":[{"tool":"containers"},{"tool":"stats"}]}
+Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. You may first write a brief Thought before the JSON. User request: show containers then stats
+PLAN: Thought: The user wants to see running containers first, then host performance statistics.
+{"steps":[{"tool":"containers"},{"tool":"stats"}]}
 
-Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. User request: check containers and health
-PLAN: {"steps":[{"tool":"containers"},{"tool":"health"}]}
+Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. You may first write a brief Thought before the JSON. User request: check containers and health
+PLAN: Thought: First inspect container status, then check overall system health.
+{"steps":[{"tool":"containers"},{"tool":"health"}]}
 
-Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. User request: restart stack media and show logs
-PLAN: {"steps":[{"tool":"restart_stack","target":"media"},{"tool":"logs","target":"media"}]}
+Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. You may first write a brief Thought before the JSON. User request: restart stack media and show logs
+PLAN: Thought: The user wants to restart the media stack and immediately tail its logs.
+{"steps":[{"tool":"restart_stack","target":"media"},{"tool":"logs","target":"media"}]}
 
-Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. User request: start container jellyfin and stop container traefik
-PLAN: {"steps":[{"tool":"start_container","target":"jellyfin"},{"tool":"stop_container","target":"traefik"}]}
+Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. You may first write a brief Thought before the JSON. User request: start container jellyfin and stop container traefik
+PLAN: Thought: The user requests starting jellyfin and stopping traefik sequentially.
+{"steps":[{"tool":"start_container","target":"jellyfin"},{"tool":"stop_container","target":"traefik"}]}
 
-Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. User request: show logs for jellyfin and check stats
-PLAN: {"steps":[{"tool":"logs","target":"jellyfin"},{"tool":"stats"}]}
+Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. You may first write a brief Thought before the JSON. User request: show logs for jellyfin and check stats
+PLAN: Thought: The user wants to inspect jellyfin logs and then check system resource consumption.
+{"steps":[{"tool":"logs","target":"jellyfin"},{"tool":"stats"}]}
 
-Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. User request: restart container traefik and show health
-PLAN: {"steps":[{"tool":"restart_container","target":"traefik"},{"tool":"health"}]}
+Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. You may first write a brief Thought before the JSON. User request: restart container traefik and show health
+PLAN: Thought: Restart the traefik reverse proxy container and then verify system health.
+{"steps":[{"tool":"restart_container","target":"traefik"},{"tool":"health"}]}
 
-Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. User request: stop stack media then start stack media
-PLAN: {"steps":[{"tool":"stop_stack","target":"media"},{"tool":"start_stack","target":"media"}]}
+Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. You may first write a brief Thought before the JSON. User request: stop stack media then start stack media
+PLAN: Thought: The user wants to manually cycle the media stack by stopping and restarting it.
+{"steps":[{"tool":"stop_stack","target":"media"},{"tool":"start_stack","target":"media"}]}
 
-Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. User request: restart service core and check health
-PLAN: {"steps":[{"tool":"restart_service","target":"core"},{"tool":"health"}]}
+Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. You may first write a brief Thought before the JSON. User request: restart service core and check health
+PLAN: Thought: Restart the core system service, then verify system health to confirm recovery.
+{"steps":[{"tool":"restart_service","target":"core"},{"tool":"health"}]}
 
-Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. User request: stop container jellyfin then show containers
-PLAN: {"steps":[{"tool":"stop_container","target":"jellyfin"},{"tool":"containers"}]}
+Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. You may first write a brief Thought before the JSON. User request: stop container jellyfin then show containers
+PLAN: Thought: Stop the jellyfin container and verify the updated container list.
+{"steps":[{"tool":"stop_container","target":"jellyfin"},{"tool":"containers"}]}
 
-Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. User request: start stack monitoring after that show health
-PLAN: {"steps":[{"tool":"start_stack","target":"monitoring"},{"tool":"health"}]}
+Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. You may first write a brief Thought before the JSON. User request: start stack monitoring after that show health
+PLAN: Thought: Start the monitoring stack, then check overall health to ensure monitoring agents are up.
+{"steps":[{"tool":"start_stack","target":"monitoring"},{"tool":"health"}]}
 
-Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. User request: show logs for core and restart service core
-PLAN: {"steps":[{"tool":"logs","target":"core"},{"tool":"restart_service","target":"core"}]}
+Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. You may first write a brief Thought before the JSON. User request: show logs for core and restart service core
+PLAN: Thought: Examine core service logs before issuing a restart to preserve diagnosis context.
+{"steps":[{"tool":"logs","target":"core"},{"tool":"restart_service","target":"core"}]}
 
-Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. User request: stop service proxy then start service proxy
-PLAN: {"steps":[{"tool":"stop_service","target":"proxy"},{"tool":"start_service","target":"proxy"}]}
+Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. You may first write a brief Thought before the JSON. User request: stop service proxy then start service proxy
+PLAN: Thought: Stop the proxy service and then restart it to reload configuration.
+{"steps":[{"tool":"stop_service","target":"proxy"},{"tool":"start_service","target":"proxy"}]}
+
+Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. You may first write a brief Thought before the JSON. User request: diagnose jellyfin container
+PLAN: Thought: To diagnose jellyfin, check running containers, inspect jellyfin logs, and verify overall health.
+{"steps":[{"tool":"containers"},{"tool":"logs","target":"jellyfin"},{"tool":"health"}]}
+
+Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. You may first write a brief Thought before the JSON. User request: verify and restart jellyfin
+PLAN: Thought: First check container status to see if jellyfin is running, restart jellyfin, and verify health.
+{"steps":[{"tool":"containers"},{"tool":"restart_container","target":"jellyfin"},{"tool":"health"}]}
+
+Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. You may first write a brief Thought before the JSON. User request: cycle media stack and verify health
+PLAN: Thought: Restart the media stack and check health to confirm all media services recovered.
+{"steps":[{"tool":"restart_stack","target":"media"},{"tool":"health"}]}
+
+Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. You may first write a brief Thought before the JSON. User request: troubleshoot traefik proxy issues
+PLAN: Thought: To troubleshoot traefik, check containers, pull traefik logs, and review system stats.
+{"steps":[{"tool":"containers"},{"tool":"logs","target":"traefik"},{"tool":"stats"}]}
+
+Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. You may first write a brief Thought before the JSON. User request: full system health audit
+PLAN: Thought: Perform a full system audit by checking system stats, service health, and all running containers.
+{"steps":[{"tool":"stats"},{"tool":"health"},{"tool":"containers"}]}
+
+Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. You may first write a brief Thought before the JSON. User request: restart traefik and check logs and health
+PLAN: Thought: Restart the traefik container, tail its startup logs, and verify system health.
+{"steps":[{"tool":"restart_container","target":"traefik"},{"tool":"logs","target":"traefik"},{"tool":"health"}]}
+
+Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. You may first write a brief Thought before the JSON. User request: safe restart of media stack with log inspection
+PLAN: Thought: Inspect media logs before restarting the media stack, then check health after restart.
+{"steps":[{"tool":"logs","target":"media"},{"tool":"restart_stack","target":"media"},{"tool":"health"}]}
+
+Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. You may first write a brief Thought before the JSON. User request: check ollama logs and system stats
+PLAN: Thought: Retrieve logs for ollama inference container and verify system resource usage.
+{"steps":[{"tool":"logs","target":"ollama"},{"tool":"stats"}]}
+
+Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. You may first write a brief Thought before the JSON. User request: restart core service and verify containers and health
+PLAN: Thought: Restart core service, verify containers are still operating, and confirm system health.
+{"steps":[{"tool":"restart_service","target":"core"},{"tool":"containers"},{"tool":"health"}]}
+
+Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. You may first write a brief Thought before the JSON. User request: bring up monitoring and check health and stats
+PLAN: Thought: Start monitoring stack, confirm overall health, and review current system statistics.
+{"steps":[{"tool":"start_stack","target":"monitoring"},{"tool":"health"},{"tool":"stats"}]}
+
+Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. You may first write a brief Thought before the JSON. User request: stop broken container jellyfin and inspect logs
+PLAN: Thought: Stop the failing jellyfin container and fetch its exit logs for analysis.
+{"steps":[{"tool":"stop_container","target":"jellyfin"},{"tool":"logs","target":"jellyfin"}]}
+
+Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. You may first write a brief Thought before the JSON. User request: restart cloudflared tunnel and verify health
+PLAN: Thought: Restart cloudflared tunnel container and verify system health.
+{"steps":[{"tool":"restart_container","target":"cloudflared"},{"tool":"health"}]}
+
+Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. You may first write a brief Thought before the JSON. User request: reboot proxy service and check logs
+PLAN: Thought: Restart proxy service and review its startup logs to ensure routing is clean.
+{"steps":[{"tool":"restart_service","target":"proxy"},{"tool":"logs","target":"proxy"}]}
+
+Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. You may first write a brief Thought before the JSON. User request: check if traefik is healthy and review its logs
+PLAN: Thought: First check system health, then check traefik container logs.
+{"steps":[{"tool":"health"},{"tool":"logs","target":"traefik"}]}
+
+Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. You may first write a brief Thought before the JSON. User request: stop media stack check containers and stats
+PLAN: Thought: Stop the media stack, verify container teardown, and check system resource release.
+{"steps":[{"tool":"stop_stack","target":"media"},{"tool":"containers"},{"tool":"stats"}]}
+
+Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. You may first write a brief Thought before the JSON. User request: start media stack and check containers and logs
+PLAN: Thought: Start the media stack, check container presence, and view media stack logs.
+{"steps":[{"tool":"start_stack","target":"media"},{"tool":"containers"},{"tool":"logs","target":"media"}]}
+
+Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. You may first write a brief Thought before the JSON. User request: diagnose high resource usage
+PLAN: Thought: To diagnose high resource usage, inspect system statistics and list running containers.
+{"steps":[{"tool":"stats"},{"tool":"containers"}]}
+
+Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. You may first write a brief Thought before the JSON. User request: recover crashed core service
+PLAN: Thought: Fetch core logs to inspect crash reason, restart core service, and verify health.
+{"steps":[{"tool":"logs","target":"core"},{"tool":"restart_service","target":"core"},{"tool":"health"}]}
 
 Question: how do I install m3tal
 Reference notes:
@@ -175,4 +269,48 @@ Reference notes:
 Traefik is deployed as the primary reverse proxy and SSL terminator for M3TAL services.
 Answer using the reference notes and cite sources with [1], [2], or title. If they do not contain the answer, say so.
 Answer: I don't know based on the provided reference notes.
+
+Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. You may first write a brief Thought before the JSON. User request: restart jellyfin
+PLAN: Thought: Jellyfin is a media streaming container workload managed by Docker Compose, so restart_container is the correct tool.
+{"steps":[{"tool":"restart_container","target":"jellyfin"}]}
+
+Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. You may first write a brief Thought before the JSON. User request: stop jellyfin
+PLAN: Thought: Jellyfin is a Docker container; stop_container is the right tool.
+{"steps":[{"tool":"stop_container","target":"jellyfin"}]}
+
+Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. You may first write a brief Thought before the JSON. User request: start jellyfin
+PLAN: Thought: Jellyfin is a Docker container; start_container is the right tool.
+{"steps":[{"tool":"start_container","target":"jellyfin"}]}
+
+Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. You may first write a brief Thought before the JSON. User request: restart traefik
+PLAN: Thought: Traefik is the reverse proxy container; restart_container applies.
+{"steps":[{"tool":"restart_container","target":"traefik"}]}
+
+Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. You may first write a brief Thought before the JSON. User request: restart cloudflared
+PLAN: Thought: Cloudflared runs as a tunnel container; restart_container is correct.
+{"steps":[{"tool":"restart_container","target":"cloudflared"}]}
+
+Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. You may first write a brief Thought before the JSON. User request: restart docker
+PLAN: Thought: Docker is an OS-level system service, not a container; restart_service is the correct tool.
+{"steps":[{"tool":"restart_service","target":"docker"}]}
+
+Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. You may first write a brief Thought before the JSON. User request: restart media
+PLAN: Thought: Media is a Docker Compose stack containing multiple services; restart_stack is the correct tool.
+{"steps":[{"tool":"restart_stack","target":"media"}]}
+
+Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. You may first write a brief Thought before the JSON. User request: logs for jellyfin
+PLAN: Thought: The user wants recent logs from the jellyfin container.
+{"steps":[{"tool":"logs","target":"jellyfin"}]}
+
+Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. You may first write a brief Thought before the JSON. User request: logs cloudflared
+PLAN: Thought: The user wants logs from the cloudflared tunnel container.
+{"steps":[{"tool":"logs","target":"cloudflared"}]}
+
+Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. You may first write a brief Thought before the JSON. User request: restart ollama
+PLAN: Thought: Ollama is an AI inference container; restart_container is correct.
+{"steps":[{"tool":"restart_container","target":"ollama"}]}
+
+Plan the user's request using only these tool names: stats, health, containers, logs, start_stack, stop_stack, restart_stack, start_container, stop_container, restart_container, start_service, stop_service, restart_service. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. You may first write a brief Thought before the JSON. User request: logs traefik
+PLAN: Thought: The user wants logs from the traefik reverse proxy container.
+{"steps":[{"tool":"logs","target":"traefik"}]}
 

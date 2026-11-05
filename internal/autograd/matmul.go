@@ -3,7 +3,7 @@ package autograd
 import (
 	"fmt"
 
-	"m3tal-ai/internal/tensor"
+	"m3tal-llm/internal/tensor"
 )
 
 // MatMul performs matrix multiplication between a and b.

@@ -3,7 +3,7 @@ package nn
 import (
 	"fmt"
 
-	"m3tal-ai/internal/tensor"
+	"m3tal-llm/internal/tensor"
 )
 
 // Layer is a trainable or stateless matrix transformation used by Sequential.

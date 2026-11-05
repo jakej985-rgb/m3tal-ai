@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"math"
 
-	"m3tal-ai/internal/tensor"
+	"m3tal-llm/internal/tensor"
 )
 
 // Tanh applies tanh element-wise to a matrix.

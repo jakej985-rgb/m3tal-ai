@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"reflect"
 
-	"m3tal-ai/internal/tensor"
+	"m3tal-llm/internal/tensor"
 )
 
 var (
@@ -265,6 +265,54 @@ func topologicalSort(root *Variable) ([]*Variable, error) {
 		return nil, err
 	}
 	return order, nil
+}
+
+// NewOpVariable creates a new Variable resulting from an operation, registering parents and backward function.
+func NewOpVariable(data *tensor.Tensor, parents []*Variable, backward func() error) *Variable {
+	requiresGrad := false
+	validParents := make([]*Variable, 0, len(parents))
+	for _, p := range parents {
+		if p != nil {
+			if p.RequiresGrad {
+				requiresGrad = true
+			}
+			validParents = append(validParents, p)
+		}
+	}
+	v := &Variable{
+		Data:         data,
+		RequiresGrad: requiresGrad,
+		parents:      validParents,
+		backward:     backward,
+	}
+	return v
+}
+
+// SetBackward configures the computation graph topology and reverse-mode gradient closure for custom ops.
+func (v *Variable) SetBackward(parents []*Variable, fn func() error) {
+	v.parents = parents
+	v.backward = fn
+}
+
+// FlatToIndices converts a flat linear element index into N-D coordinate indices.
+func FlatToIndices(flat int, shape []int) ([]int, error) {
+	return flatToIndices(flat, shape)
+}
+
+// OnBackward attaches an additional callback to be run during the backward pass of v.
+func (v *Variable) OnBackward(cb func() error) {
+	orig := v.backward
+	v.backward = func() error {
+		if orig != nil {
+			if err := orig(); err != nil {
+				return err
+			}
+		}
+		if cb != nil {
+			return cb()
+		}
+		return nil
+	}
 }
 
 // flatToIndices converts a flat linear element index into N-D coordinate indices.

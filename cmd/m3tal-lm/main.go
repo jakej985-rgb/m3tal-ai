@@ -7,7 +7,7 @@ import (
 	"os"
 	"strings"
 
-	"m3tal-ai/internal/lm"
+	"m3tal-llm/internal/lm"
 )
 
 func main() {
