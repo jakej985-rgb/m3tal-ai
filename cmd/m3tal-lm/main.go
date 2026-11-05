@@ -24,7 +24,7 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: go run ./cmd/m3tal-lm train|eval|generate|instructions|dataset|backends [flags]")
+		return fmt.Errorf("usage: go run ./cmd/m3tal-lm train|eval|generate|instructions|dataset|backends|model-info [flags]")
 	}
 	switch args[0] {
 	case "backends":
@@ -47,7 +47,7 @@ func run(args []string) error {
 		steps := flags.Int("steps", 40, "optimizer steps per epoch")
 		vocab := flags.Int("vocab", 384, "BPE tokenizer vocabulary size")
 		contextLength := flags.Int("context", 512, "maximum context tokens (up to 2048)")
-		width := flags.Int("width", 64, "model width (up to 512)")
+		width := flags.Int("width", 64, "model width (up to 2048)")
 		layers := flags.Int("layers", 4, "number of transformer layers (1-16)")
 		heads := flags.Int("heads", 4, "number of attention heads (must divide width)")
 		seed := flags.Int64("seed", 17, "deterministic initialization seed")
@@ -293,8 +293,10 @@ func run(args []string) error {
 		}
 		fmt.Printf("wrote %d instruction examples to %s\n", len(examples), *output)
 		return nil
+	case "model-info":
+		return modelInfo(args[1:])
 	default:
-		return fmt.Errorf("unknown command %q; use train, eval, generate, or instructions", args[0])
+		return fmt.Errorf("unknown command %q; use train, eval, generate, instructions, dataset, backends, or model-info", args[0])
 	}
 }
 
@@ -720,5 +722,35 @@ func datasetAnnotate(args []string) error {
 		return err
 	}
 	fmt.Printf("wrote provenance %s to %s (%d sources)\n", prov.ManifestID, flags.Arg(0), len(sources))
+	return nil
+}
+
+// modelInfo prints the analytic parameter count, component breakdown, and
+// memory estimates for a model configuration (Stage 2 config benchmark).
+func modelInfo(args []string) error {
+	flags := flag.NewFlagSet("model-info", flag.ContinueOnError)
+	context := flags.Int("context", 1024, "context length")
+	width := flags.Int("width", 1024, "model width")
+	layers := flags.Int("layers", 12, "transformer layers")
+	heads := flags.Int("heads", 16, "attention heads")
+	vocab := flags.Int("vocab", 512, "vocabulary size")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	cfg := lm.Config{Context: *context, Width: *width, Layers: *layers, Heads: *heads}
+	total := cfg.ParameterCount(*vocab)
+	emb, blocks, output := cfg.ParameterBreakdown(*vocab)
+	fmt.Printf("config: context=%d width=%d layers=%d heads=%d vocab=%d\n",
+		*context, *width, *layers, *heads, *vocab)
+	fmt.Printf("parameters: %d (%.2fM)\n", total, float64(total)/1e6)
+	fmt.Printf("  token embedding:  %12d (%.2fM)\n", emb, float64(emb)/1e6)
+	fmt.Printf("  transformer blocks:%12d (%.2fM)\n", blocks, float64(blocks)/1e6)
+	fmt.Printf("  output projection:%12d (%.2fM)\n", output, float64(output)/1e6)
+	weightBytes := int64(total) * 4
+	trainBytes := int64(total) * 16 // values + grad + Adam first/second (f32)
+	fmt.Printf("memory (fp32):\n")
+	fmt.Printf("  inference weights: %.2f GiB\n", float64(weightBytes)/(1<<30))
+	fmt.Printf("  training state (weights+grad+2 Adam moments): %.2f GiB\n", float64(trainBytes)/(1<<30))
+	fmt.Printf("approx FLOPs/token (fwd+bwd ~ 6N): %.2f GFLOP\n", float64(total)*6/1e9)
 	return nil
 }

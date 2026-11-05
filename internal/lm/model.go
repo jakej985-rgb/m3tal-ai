@@ -28,6 +28,31 @@ func (c *Config) Normalize() {
 	}
 }
 
+// ParameterCount returns the analytic trainable-parameter count for this
+// config and vocabulary size. It mirrors NewModel's layout exactly:
+// token embedding (vocab*width), per-block RMSNorm gammas (2*width),
+// attention Q/K/V/O projections (4*(width^2+width)), SwiGLU FFN
+// (gate/up width->2*width, down 2*width->width = 6*width^2+5*width),
+// and the output projection (width*vocab+vocab). Position encoding is
+// RoPE, so there is no position table.
+func (c Config) ParameterCount(vocab int) int {
+	c.Normalize()
+	w := c.Width
+	perBlock := 10*w*w + 11*w
+	return vocab*w + c.Layers*perBlock + w*vocab + vocab
+}
+
+// ParameterBreakdown splits ParameterCount into embedding, per-block,
+// and output-projection components for reporting.
+func (c Config) ParameterBreakdown(vocab int) (emb, blocks, output int) {
+	c.Normalize()
+	w := c.Width
+	emb = vocab * w
+	blocks = c.Layers * (10*w*w + 11*w)
+	output = w*vocab + vocab
+	return emb, blocks, output
+}
+
 // DefaultConfig fits an instruction-capable training prototype on CPU-only machines.
 func DefaultConfig() Config { return Config{Context: 256, Width: 64, Layers: 4, Heads: 4} }
 
@@ -105,7 +130,7 @@ func (m *Model) addParameter(p *parameter) *parameter {
 // and pre-FFN). Position is encoded via RoPE; no posEmb table is allocated.
 func NewModel(config Config, tokenizer *Tokenizer, seed int64) (*Model, error) {
 	config.Normalize()
-	if config.Context < 2 || config.Context > 2048 || config.Width < 2 || config.Width > 512 ||
+	if config.Context < 2 || config.Context > 2048 || config.Width < 2 || config.Width > 2048 ||
 		tokenizer == nil || len(tokenizer.Tokens) < MinVocabSize || len(tokenizer.Tokens) > MaxVocabSize {
 		return nil, fmt.Errorf("invalid model config or tokenizer")
 	}

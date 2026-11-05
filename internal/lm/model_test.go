@@ -463,3 +463,30 @@ func TestKVCacheMatchesFullForward(t *testing.T) {
 	}
 	_ = ids2
 }
+
+func TestConfigParameterCountMatchesModel(t *testing.T) {
+	tok := testTokenizer(t)
+	for _, cfg := range []Config{
+		{Context: 8, Width: 8, Layers: 1, Heads: 2},
+		{Context: 16, Width: 16, Layers: 2, Heads: 4},
+		{Context: 32, Width: 32, Layers: 3, Heads: 8},
+	} {
+		m, err := NewModel(cfg, tok, 7)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := cfg.ParameterCount(len(tok.Tokens))
+		if got := m.ParameterCount(); got != want {
+			t.Fatalf("config %+v: analytic %d != model %d", cfg, want, got)
+		}
+		emb, blocks, output := cfg.ParameterBreakdown(len(tok.Tokens))
+		if emb+blocks+output != want {
+			t.Fatalf("breakdown does not sum: %d+%d+%d != %d", emb, blocks, output, want)
+		}
+	}
+	// Known reference: stage0-tiny config (context 64, width 64, 2 layers,
+	// 4 heads, vocab 512) = 149,376 parameters.
+	if got := (Config{Context: 64, Width: 64, Layers: 2, Heads: 4}).ParameterCount(512); got != 149376 {
+		t.Fatalf("stage0-tiny count = %d, want 149376", got)
+	}
+}
