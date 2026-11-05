@@ -267,6 +267,17 @@ func topologicalSort(root *Variable) ([]*Variable, error) {
 	return order, nil
 }
 
+// SetBackward configures the computation graph topology and reverse-mode gradient closure for custom ops.
+func (v *Variable) SetBackward(parents []*Variable, fn func() error) {
+	v.parents = parents
+	v.backward = fn
+}
+
+// FlatToIndices converts a flat linear element index into N-D coordinate indices.
+func FlatToIndices(flat int, shape []int) ([]int, error) {
+	return flatToIndices(flat, shape)
+}
+
 // flatToIndices converts a flat linear element index into N-D coordinate indices.
 func flatToIndices(flat int, shape []int) ([]int, error) {
 	if len(shape) == 0 {
