@@ -55,9 +55,15 @@
 // 3. Storage Ownership: [Storage.OwnsMemory] reports whether the storage owns its buffer.
 // When created via [New] or [NewCPUStorage], the storage owns the allocated buffer.
 //
-// # CPU Device Contract
+// # CPU Device Contract and Operations
 //
 // Tensors created via [New], [FromFloat32], and [FromFloat64] reside on the host CPU ([CPUDevice]).
 // CPU storage uses little-endian byte representations and host RAM. Hardware execution bounds are
 // checked on all index accesses: out-of-bounds index requests return [ErrIndexOutOfBounds].
+//
+// The CPU backend provides:
+//   - Elementwise arithmetic: [Add], [Sub], [Mul], and [Div] with broadcasting support, as well as [Tensor.Neg] and [Tensor.Scale].
+//   - Reductions: [Sum], [Mean], [Max], and [Min] across specified axes or all dimensions, with optional rank preservation (keepDims).
+//   - Shape transformations: [BroadcastShapes], [Tensor.BroadcastTo], [Tensor.Transpose], [Tensor.Squeeze], [Tensor.Unsqueeze], and [Tensor.Flatten].
+//   - Matrix multiplication: [MatMul] supporting 2D matrices and N-D batched matrices with broadcasting, implemented via cache-friendly blocked GEMM.
 package tensor
