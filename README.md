@@ -45,6 +45,16 @@ plain text. A limited amount of text is indexed per run to keep the prototype
 bounded. `go run ./cmd/regen-instructions` regenerates `data/instructions.txt`
 from the built-in instruction set.
 
+Stage 2 added provenance-tracked dataset building (`dataset build|report|
+verify|split|annotate|export` — see `docs/DATA.md`) and a repeatable eval
+benchmark (`eval-bench` — see `docs/EVAL.md`). Stage 3 adds chat
+fine-tuning: the `m3tal.chatml.v1` template with assistant-only loss masks
+(`internal/lm/chat.go`), self-owned chat JSONL data (`chatdata
+validate|split`, `instructions --chat`), SFT via `train --sft`, decoding
+controls (`generate --chat --top-p --top-k --stop --stream`), a held-out
+conversational eval suite (`chat-eval`), and optional DPO (`train --dpo`).
+See `docs/STAGE3.md` for the full pipeline and run evidence.
+
 The assistant in `m3tal-plugins/m3tal-ai` keeps deterministic Core routing and
 accepts an optional language model through its `Generator` interface. Model
 proposals are rejected unless they parse into the fixed tool schema, targets

@@ -1,0 +1,6 @@
+# Self-owned preference pairs for DPO smoke testing (authored for this repo).
+{"id":"pref-1","source":"self-owned","license":"self-owned","category":"qa","prompt":[{"role":"user","content":"What is the capital of France?"}],"chosen":"The capital of France is Paris.","rejected":"I have no idea."}
+{"id":"pref-2","source":"self-owned","license":"self-owned","category":"qa","prompt":[{"role":"user","content":"How many days are in a week?"}],"chosen":"There are 7 days in a week.","rejected":"Maybe 5?"}
+{"id":"pref-3","source":"self-owned","license":"self-owned","category":"format","prompt":[{"role":"system","content":"Answer in one word."},{"role":"user","content":"What color is the sky?"}],"chosen":"Blue","rejected":"The sky is a beautiful shade of blue on most clear days."}
+{"id":"pref-4","source":"self-owned","license":"self-owned","category":"chat","prompt":[{"role":"user","content":"Say hello."}],"chosen":"Hello! How can I help you today?","rejected":"hello"}
+{"id":"pref-5","source":"self-owned","license":"self-owned","category":"qa","prompt":[{"role":"user","content":"What is 2+2?"}],"chosen":"4","rejected":"5"}

@@ -610,3 +610,23 @@ func ValidatePlanJSON(completion string) error {
 	}
 	return nil
 }
+
+// ChatExamplesFromInstructions converts the self-owned instruction set
+// into chat-format examples (user prompt → assistant completion) for SFT.
+func ChatExamplesFromInstructions(examples []InstructionExample) []ChatExample {
+	out := make([]ChatExample, 0, len(examples))
+	for _, ex := range examples {
+		content := strings.TrimSpace(ex.Completion)
+		if ex.Thought != "" {
+			content = "Thought: " + ex.Thought + "\n" + content
+		}
+		out = append(out, ChatExample{
+			Conversation: Conversation{Messages: []ChatMessage{
+				{Role: RoleUser, Content: strings.TrimSpace(ex.Prompt)},
+				{Role: RoleAssistant, Content: content},
+			}},
+			Category: ex.Category,
+		})
+	}
+	return out
+}

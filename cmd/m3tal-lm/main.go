@@ -10,6 +10,7 @@ import (
 	"math"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -45,6 +46,8 @@ func run(args []string) error {
 		pretrainEpochs := flags.Int("pretrain-epochs", 5, "pretraining epochs if --pretrain-corpus is provided")
 		includeInstructions := flags.Bool("include-instructions", false, "include curated self-owned instruction examples in training corpus")
 		instructMode := flags.Bool("instruct", false, "train using prompt-loss masking on instruction examples")
+		sftArg := flags.String("sft", "", "chat instruction JSONL dataset for supervised fine-tuning (assistant-only loss masks)")
+		dpoArg := flags.String("dpo", "", "preference JSONL dataset for DPO training (requires --base-model; ref = frozen copy)")
 		epochs := flags.Int("epochs", 2, "training epochs")
 		steps := flags.Int("steps", 40, "optimizer steps per epoch")
 		vocab := flags.Int("vocab", 384, "BPE tokenizer vocabulary size")
@@ -83,8 +86,17 @@ func run(args []string) error {
 				}
 			}
 		} else {
-			if strings.TrimSpace(*corpusArg) == "" && strings.TrimSpace(*pretrainCorpus) == "" {
-				return fmt.Errorf("--corpus or --pretrain-corpus is required; only use text you are licensed to train on")
+			var sftExamples []lm.ChatExample
+			if strings.TrimSpace(*sftArg) != "" {
+				ex, stats, loadErr := lm.LoadChatJSONL(*sftArg)
+				if loadErr != nil {
+					return fmt.Errorf("load sft data: %w", loadErr)
+				}
+				fmt.Printf("sft data: %d valid, %d invalid, %d duplicates\n", stats.Valid, stats.Invalid, stats.Duplicates)
+				sftExamples = ex
+			}
+			if strings.TrimSpace(*corpusArg) == "" && strings.TrimSpace(*pretrainCorpus) == "" && len(sftExamples) == 0 {
+				return fmt.Errorf("--corpus, --pretrain-corpus, or --sft is required; only use text you are licensed to train on")
 			}
 			var pretrainTexts []string
 			if strings.TrimSpace(*pretrainCorpus) != "" {
@@ -112,6 +124,11 @@ func run(args []string) error {
 				instTexts := lm.FormatInstructionCorpus(lm.DefaultInstructionSet())
 				for rep := 0; rep < 5; rep++ {
 					tokenizerTexts = append(tokenizerTexts, instTexts...)
+				}
+			}
+			if len(sftExamples) > 0 {
+				for _, ex := range sftExamples {
+					tokenizerTexts = append(tokenizerTexts, ex.Serialize())
 				}
 			}
 			var err error
@@ -147,7 +164,87 @@ func run(args []string) error {
 
 		var losses []float64
 		var err error
-		if *instructMode {
+		if strings.TrimSpace(*dpoArg) != "" {
+			if strings.TrimSpace(*baseModel) == "" {
+				return fmt.Errorf("--dpo requires --base-model (used as both policy init and frozen reference)")
+			}
+			pairs, records, invalid, err := lm.LoadPreferenceJSONL(*dpoArg)
+			if err != nil {
+				return fmt.Errorf("load dpo data: %w", err)
+			}
+			if len(pairs) == 0 {
+				return fmt.Errorf("dpo dataset has no valid pairs (%d records, %d invalid)", records, invalid)
+			}
+			fmt.Printf("dpo data: %d valid pairs (%d records, %d invalid)\n", len(pairs), records, invalid)
+			refModel, err := lm.LoadCheckpoint(*baseModel)
+			if err != nil {
+				return fmt.Errorf("load reference model: %w", err)
+			}
+			maxSteps := *maxSteps
+			if maxSteps == 0 {
+				maxSteps = int64(*epochs) * int64(*steps)
+			}
+			cfg := lm.DPOConfig{
+				TrainConfig: lm.TrainConfig{
+					MaxSteps:     maxSteps,
+					LearningRate: *learningRate,
+					WarmupSteps:  *warmup,
+					MinLRRatio:   *minLRRatio,
+					GradClip:     *gradClip,
+					LogEvery:     *logEvery,
+					Seed:         *seed,
+				},
+				Beta: 0.1,
+			}
+			loss, err := model.TrainDPO(pairs, refModel, cfg, func(m lm.TrainMetrics) {
+				fmt.Printf("dpo step %d loss %.4f lr %.2e grad %.3f\n",
+					m.Step, m.Loss, m.LearningRate, m.GradNorm)
+			})
+			if err != nil {
+				return fmt.Errorf("dpo train: %w", err)
+			}
+			losses = []float64{loss}
+		} else if strings.TrimSpace(*sftArg) != "" {
+			// sftExamples already loaded during tokenizer setup when no
+			// base model was given; reload when continuing from a checkpoint
+			// so the dataset is always validated.
+			var sftExamples []lm.ChatExample
+			var stats lm.ChatDataStats
+			sftExamples, stats, err = lm.LoadChatJSONL(*sftArg)
+			if err != nil {
+				return fmt.Errorf("load sft data: %w", err)
+			}
+			if stats.Valid == 0 {
+				return fmt.Errorf("sft dataset has no valid examples")
+			}
+			summary, err := model.SummarizeSFT(sftExamples)
+			if err != nil {
+				return fmt.Errorf("sft prepare: %w", err)
+			}
+			fmt.Printf("sft: %d examples → %d windows, %d assistant (masked) tokens, template %s\n",
+				summary.Examples, summary.Windows, summary.MaskedTokens, summary.TemplateVersion)
+			maxSteps := *maxSteps
+			if maxSteps == 0 {
+				maxSteps = int64(*epochs) * int64(*steps)
+			}
+			cfg := lm.TrainConfig{
+				MaxSteps:     maxSteps,
+				LearningRate: *learningRate,
+				WarmupSteps:  *warmup,
+				MinLRRatio:   *minLRRatio,
+				GradClip:     *gradClip,
+				LogEvery:     *logEvery,
+				Seed:         *seed,
+			}
+			loss, err := model.TrainChat(sftExamples, cfg, func(m lm.SFTMetrics) {
+				fmt.Printf("sft step %d loss %.4f lr %.2e tok/s %.0f grad %.3f masked-tok %d\n",
+					m.Step, m.Loss, m.LearningRate, m.TokensPerSec, m.GradNorm, m.MaskedTokens)
+			})
+			if err != nil {
+				return fmt.Errorf("sft train: %w", err)
+			}
+			losses = []float64{loss}
+		} else if *instructMode {
 			losses, err = model.TrainInstructions(lm.DefaultInstructionSet(), *epochs, *steps, *learningRate)
 		} else if strings.TrimSpace(*datasetArg) != "" {
 			ds, err := lm.OpenDataset(*datasetArg)
@@ -270,6 +367,11 @@ func run(args []string) error {
 		count := flags.Int("tokens", 80, "number of new tokens")
 		temperature := flags.Float64("temperature", 0.8, "sampling temperature")
 		seed := flags.Int64("seed", 19, "sampling seed")
+		topK := flags.Int("top-k", 0, "top-k sampling (0 = disabled)")
+		topP := flags.Float64("top-p", 0, "nucleus sampling threshold in (0,1] (0 = disabled)")
+		stopArg := flags.String("stop", "", "comma-separated decoded-text stop markers")
+		stream := flags.Bool("stream", false, "stream generated text to stdout")
+		chatMode := flags.Bool("chat", false, "wrap prompt as a chat user turn (chatml.v1 template + stop marker)")
 		if err := flags.Parse(args[1:]); err != nil {
 			return err
 		}
@@ -277,15 +379,53 @@ func run(args []string) error {
 		if err != nil {
 			return err
 		}
-		generated, err := model.Generate(*prompt, *count, *temperature, *seed)
+		var stops []string
+		if *stopArg != "" {
+			for _, m := range strings.Split(*stopArg, ",") {
+				if m = strings.TrimSpace(m); m != "" {
+					stops = append(stops, m)
+				}
+			}
+		}
+		promptText := *prompt
+		if *chatMode {
+			conv := lm.Conversation{Messages: []lm.ChatMessage{
+				{Role: lm.RoleUser, Content: *prompt},
+			}}
+			promptText = model.Tokenizer.Decode(conv.EncodePrompt(model.Tokenizer))
+			if len(stops) == 0 {
+				stops = lm.StopMarkers()
+			}
+		}
+		opts := lm.GenerateOptions{
+			MaxTokens:   *count,
+			Temperature: *temperature,
+			TopK:        *topK,
+			TopP:        *topP,
+			Seed:        *seed,
+			Stop:        stops,
+		}
+		var generated string
+		if *stream {
+			generated, err = model.GenerateStream(promptText, opts, func(delta string) error {
+				fmt.Print(delta)
+				return nil
+			})
+			fmt.Println()
+		} else {
+			generated, err = model.GenerateWithOptions(promptText, opts)
+		}
 		if err != nil {
 			return err
 		}
-		fmt.Println(generated)
+		if !*stream {
+			fmt.Println(generated)
+		}
 		return nil
 	case "instructions":
 		flags := flag.NewFlagSet("instructions", flag.ContinueOnError)
 		output := flags.String("output", "data/instructions.txt", "output instruction corpus path")
+		chatOut := flags.String("chat", "", "also write chat-format JSONL for SFT to this path")
 		if err := flags.Parse(args[1:]); err != nil {
 			return err
 		}
@@ -294,13 +434,24 @@ func run(args []string) error {
 			return err
 		}
 		fmt.Printf("wrote %d instruction examples to %s\n", len(examples), *output)
+		if *chatOut != "" {
+			chatEx := lm.ChatExamplesFromInstructions(examples)
+			if err := lm.WriteChatJSONL(*chatOut, chatEx); err != nil {
+				return err
+			}
+			fmt.Printf("wrote %d chat examples to %s\n", len(chatEx), *chatOut)
+		}
 		return nil
 	case "model-info":
 		return modelInfo(args[1:])
 	case "eval-bench":
 		return evalBench(args[1:])
+	case "chatdata":
+		return chatData(args[1:])
+	case "chat-eval":
+		return chatEval(args[1:])
 	default:
-		return fmt.Errorf("unknown command %q; use train, eval, generate, instructions, dataset, backends, or model-info", args[0])
+		return fmt.Errorf("unknown command %q; use train, eval, generate, instructions, dataset, chatdata, chat-eval, backends, or model-info", args[0])
 	}
 }
 
@@ -973,6 +1124,152 @@ func evalBench(args []string) error {
 	}
 	if regressed {
 		return fmt.Errorf("eval loss regressed vs baseline")
+	}
+	return nil
+}
+
+// chatData implements `chatdata validate|split` for chat instruction
+// JSONL datasets (Stage 3 dataset prep).
+func chatData(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: m3tal-lm chatdata validate FILE.jsonl | chatdata split --in FILE --out-dir DIR")
+	}
+	switch args[0] {
+	case "validate":
+		flags := flag.NewFlagSet("chatdata validate", flag.ContinueOnError)
+		if err := flags.Parse(args[1:]); err != nil {
+			return err
+		}
+		if flags.NArg() != 1 {
+			return fmt.Errorf("usage: m3tal-lm chatdata validate FILE.jsonl")
+		}
+		examples, stats, err := lm.LoadChatJSONL(flags.Arg(0))
+		if err != nil {
+			return err
+		}
+		counts := lm.ChatCategoryCounts(examples)
+		fmt.Printf("records %d  valid %d  invalid %d  duplicates %d\n",
+			stats.RecordsIn, stats.Valid, stats.Invalid, stats.Duplicates)
+		for _, cat := range lm.SortedCategories(counts) {
+			fmt.Printf("  %-16s %d\n", cat, counts[cat])
+		}
+		return nil
+	case "split":
+		flags := flag.NewFlagSet("chatdata split", flag.ContinueOnError)
+		in := flags.String("in", "", "input chat JSONL (required)")
+		outDir := flags.String("out-dir", "", "output directory for train.jsonl/val.jsonl (required)")
+		valFrac := flags.Float64("val-frac", 0.1, "validation fraction (deterministic hash split)")
+		if err := flags.Parse(args[1:]); err != nil {
+			return err
+		}
+		if strings.TrimSpace(*in) == "" || strings.TrimSpace(*outDir) == "" {
+			return fmt.Errorf("--in and --out-dir are required")
+		}
+		examples, stats, err := lm.LoadChatJSONL(*in)
+		if err != nil {
+			return err
+		}
+		train, val := lm.SplitChatExamples(examples, *valFrac)
+		if err := os.MkdirAll(*outDir, 0o755); err != nil {
+			return err
+		}
+		trainPath := filepath.Join(*outDir, "train.jsonl")
+		valPath := filepath.Join(*outDir, "val.jsonl")
+		if err := lm.WriteChatJSONL(trainPath, train); err != nil {
+			return err
+		}
+		if err := lm.WriteChatJSONL(valPath, val); err != nil {
+			return err
+		}
+		report := map[string]any{
+			"input": *in, "template_version": lm.ChatTemplateVersion,
+			"records_in": stats.RecordsIn, "valid": stats.Valid,
+			"invalid": stats.Invalid, "duplicates": stats.Duplicates,
+			"train": len(train), "validation": len(val), "val_frac": *valFrac,
+		}
+		data, _ := json.MarshalIndent(report, "", "  ")
+		_ = os.WriteFile(filepath.Join(*outDir, "split-report.json"), data, 0o644)
+		fmt.Printf("split %s: %d train, %d validation → %s\n", *in, len(train), len(val), *outDir)
+		return nil
+	default:
+		return fmt.Errorf("unknown chatdata subcommand %q; use validate or split", args[0])
+	}
+}
+
+// chatEval implements `chat-eval` — the held-out conversational
+// evaluation suite (Stage 3).
+func chatEval(args []string) error {
+	flags := flag.NewFlagSet("chat-eval", flag.ContinueOnError)
+	checkpoint := flags.String("checkpoint", "", "model checkpoint path (required)")
+	suite := flags.String("suite", "", "eval suite JSONL path (required)")
+	reportOut := flags.String("report", "", "write JSON report to this path")
+	baseline := flags.String("baseline", "", "previous chat-eval JSON report to compare assistant loss against")
+	maxIncrease := flags.Float64("max-loss-increase", 0.05, "fail if assistant loss exceeds baseline by more than this")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if strings.TrimSpace(*checkpoint) == "" || strings.TrimSpace(*suite) == "" {
+		return fmt.Errorf("--checkpoint and --suite are required")
+	}
+	model, err := lm.LoadCheckpoint(*checkpoint)
+	if err != nil {
+		return err
+	}
+	entries, err := lm.LoadChatEvalSuite(*suite)
+	if err != nil {
+		return err
+	}
+	report, err := model.RunChatEval(entries, *checkpoint)
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("chat-eval %s (template %s)\n", *checkpoint, report.TemplateVersion)
+	if report.ScoredExamples > 0 {
+		fmt.Printf("  scored examples %d  assistant loss %.4f  ppl %.2f  masked tokens %d\n",
+			report.ScoredExamples, report.AssistantLoss, report.AssistantPPL, report.MaskedTokens)
+	}
+	fmt.Printf("  probes %d  empty %d  max-token %d  stop-leaks %d\n",
+		report.ProbeCount, report.EmptyOutputs, report.MaxTokenExhausted, report.StopLeaks)
+	for _, p := range report.Probes {
+		out := p.Output
+		if len(out) > 80 {
+			out = out[:80] + "…"
+		}
+		fmt.Printf("  probe %s -> %q\n", p.ID, out)
+	}
+
+	regressed := false
+	if *baseline != "" {
+		data, err := os.ReadFile(*baseline)
+		if err != nil {
+			return fmt.Errorf("read baseline: %w", err)
+		}
+		var base lm.ChatEvalReport
+		if err := json.Unmarshal(data, &base); err != nil {
+			return fmt.Errorf("decode baseline: %w", err)
+		}
+		if report.ScoredExamples > 0 && base.ScoredExamples > 0 {
+			delta := report.AssistantLoss - base.AssistantLoss
+			fmt.Printf("  baseline assistant loss %.4f → delta %+.4f\n", base.AssistantLoss, delta)
+			if delta > *maxIncrease {
+				regressed = true
+			}
+		}
+	}
+
+	if *reportOut != "" {
+		data, err := json.MarshalIndent(report, "", "  ")
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(*reportOut, data, 0o644); err != nil {
+			return err
+		}
+		fmt.Printf("report written: %s\n", *reportOut)
+	}
+	if regressed {
+		return fmt.Errorf("assistant loss regressed beyond threshold vs baseline")
 	}
 	return nil
 }

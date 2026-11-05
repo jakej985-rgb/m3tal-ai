@@ -1,0 +1,13 @@
+# chat-eval suite v1 — self-owned held-out conversational prompts.
+# NOT derived from data/chat-instructions.jsonl (tool-planning domain).
+# Entries ending with an assistant message are scored (masked assistant-token loss).
+# Entries ending with user are generation probes (automated heuristics only;
+# relevance/coherence/adherence require human review — see report "note").
+{"id":"scored-qa-1","category":"qa","messages":[{"role":"user","content":"What is the capital of France?"},{"role":"assistant","content":"The capital of France is Paris."}]}
+{"id":"scored-qa-2","category":"qa","messages":[{"role":"user","content":"How many days are in a week?"},{"role":"assistant","content":"There are 7 days in a week."}]}
+{"id":"scored-format-1","category":"format","messages":[{"role":"system","content":"Answer in exactly one word."},{"role":"user","content":"What color is the sky on a clear day?"},{"role":"assistant","content":"Blue"}]}
+{"id":"scored-multi-1","category":"multi-turn","messages":[{"role":"user","content":"My name is Ada."},{"role":"assistant","content":"Nice to meet you, Ada."},{"role":"user","content":"What is my name?"},{"role":"assistant","content":"Your name is Ada."}]}
+{"id":"probe-qa-1","category":"qa","messages":[{"role":"user","content":"What is the capital of France?"}],"max_tokens":24,"temperature":0.0}
+{"id":"probe-greet-1","category":"chat","messages":[{"role":"system","content":"You are a helpful assistant."},{"role":"user","content":"Hello, how are you?"}],"max_tokens":32,"temperature":0.0}
+{"id":"probe-arith-1","category":"qa","messages":[{"role":"user","content":"What is 12 + 30?"}],"max_tokens":16,"temperature":0.0}
+{"id":"probe-plan-1","category":"tools","messages":[{"role":"user","content":"Plan the user's request using only these tool names: stats, health, containers, logs. Return JSON with a steps array; each item has tool and optional target fields. Do not include prose. User request: check system health"}],"max_tokens":48,"temperature":0.0}
