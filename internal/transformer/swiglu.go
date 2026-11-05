@@ -5,8 +5,8 @@ import (
 	"math"
 	"math/rand"
 
-	"m3tal-ai/internal/autograd"
-	"m3tal-ai/internal/tensor"
+	"m3tal-llm/internal/autograd"
+	"m3tal-llm/internal/tensor"
 )
 
 // SiLU applies the Sigmoid Linear Unit (Swish-1) activation function elementwise:

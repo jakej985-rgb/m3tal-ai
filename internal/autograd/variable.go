@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"reflect"
 
-	"m3tal-ai/internal/tensor"
+	"m3tal-llm/internal/tensor"
 )
 
 var (

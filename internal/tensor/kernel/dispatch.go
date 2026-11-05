@@ -1,7 +1,7 @@
 package kernel
 
 import (
-	"m3tal-ai/internal/tensor/cpu"
+	"m3tal-llm/internal/tensor/cpu"
 )
 
 // Dispatch wrappers that route to SIMD when available, otherwise parallel cache-blocked / fallback.

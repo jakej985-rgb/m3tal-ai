@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"math"
 
-	"m3tal-ai/internal/autograd"
-	"m3tal-ai/internal/tensor"
+	"m3tal-llm/internal/autograd"
+	"m3tal-llm/internal/tensor"
 )
 
 // DefaultRoPEBase is the standard base frequency constant (10000.0) used in RoPE embeddings.

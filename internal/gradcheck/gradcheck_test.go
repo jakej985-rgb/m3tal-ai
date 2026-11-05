@@ -7,10 +7,10 @@ import (
 	"strings"
 	"testing"
 
-	"m3tal-ai/internal/autograd"
-	"m3tal-ai/internal/lm"
-	"m3tal-ai/internal/nn"
-	"m3tal-ai/internal/tensor"
+	"m3tal-llm/internal/autograd"
+	"m3tal-llm/internal/lm"
+	"m3tal-llm/internal/nn"
+	"m3tal-llm/internal/tensor"
 )
 
 // TestGradientMismatchReporting verifies that deliberate gradient errors produce clear diagnostic strings

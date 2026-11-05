@@ -6,7 +6,7 @@ import (
 	"math"
 	"unsafe"
 
-	"m3tal-ai/internal/tensor/kernel"
+	"m3tal-llm/internal/tensor/kernel"
 )
 
 // MatMul computes the matrix multiplication of two 2D tensors: C = A * B.

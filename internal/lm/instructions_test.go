@@ -322,7 +322,7 @@ func TestEntityDisambiguationExamples(t *testing.T) {
 			if ex.Category != "plan" {
 				continue
 			}
-			if !strings.Contains(ex.Prompt, want.queryFragment) {
+			if !strings.Contains(ex.Prompt, "User request: "+want.queryFragment) {
 				continue
 			}
 			// Validate the plan JSON is well-formed.

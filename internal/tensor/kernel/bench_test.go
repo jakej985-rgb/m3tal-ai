@@ -5,7 +5,7 @@ import (
 	"math/rand"
 	"testing"
 
-	"m3tal-ai/internal/tensor/cpu"
+	"m3tal-llm/internal/tensor/cpu"
 )
 
 func benchmarkMatMulFloat32(b *testing.B, size int, forceFallback bool) {

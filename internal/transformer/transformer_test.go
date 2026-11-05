@@ -6,9 +6,9 @@ import (
 	"reflect"
 	"testing"
 
-	"m3tal-ai/internal/autograd"
-	"m3tal-ai/internal/gradcheck"
-	"m3tal-ai/internal/tensor"
+	"m3tal-llm/internal/autograd"
+	"m3tal-llm/internal/gradcheck"
+	"m3tal-llm/internal/tensor"
 )
 
 // Helper to create a Float32 Variable with given shape and values.

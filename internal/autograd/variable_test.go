@@ -6,7 +6,7 @@ import (
 	"reflect"
 	"testing"
 
-	"m3tal-ai/internal/tensor"
+	"m3tal-llm/internal/tensor"
 )
 
 // Helper to create a Float64 Variable from slice and shape.

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"reflect"
 
-	"m3tal-ai/internal/tensor"
+	"m3tal-llm/internal/tensor"
 )
 
 // Add returns the element-wise addition of a and b, supporting broadcasting.
