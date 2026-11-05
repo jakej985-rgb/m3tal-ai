@@ -30,8 +30,8 @@ and saves local JSON checkpoints; it does not download weights or call a model
 service. This is an educational prototype and is not a production-quality
 general language model. Training uses explicit backpropagation on the same
 contiguous `float32` CPU weights as generation and evaluation. Byte-level
-sampling rejects malformed UTF-8. The CPU backend is the intended boundary for
-a future GPU implementation; no GPU acceleration is included yet. Use only
+sampling rejects malformed UTF-8. An optional CUDA backend (build tag `cuda`)
+can accelerate tensor kernels on NVIDIA GPUs; see `docs/CUDA.md`. Use only
 text you have the right to train on, and record its source and license
 yourself.
 

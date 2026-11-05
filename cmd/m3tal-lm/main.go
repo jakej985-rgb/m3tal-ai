@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"m3tal-llm/internal/lm"
+	"m3tal-llm/internal/tensor/kernel"
 )
 
 func main() {
@@ -19,9 +20,13 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: go run ./cmd/m3tal-lm train|eval|generate|instructions|dataset [flags]")
+		return fmt.Errorf("usage: go run ./cmd/m3tal-lm train|eval|generate|instructions|dataset|backends [flags]")
 	}
 	switch args[0] {
+	case "backends":
+		fmt.Println(kernel.Report())
+		fmt.Printf("selected backend: %s\n", kernel.Selected())
+		return nil
 	case "dataset":
 		return runDataset(args[1:])
 	case "train":
