@@ -3,7 +3,7 @@ package nn
 import (
 	"fmt"
 
-	"m3tal-ai/internal/tensor"
+	"m3tal-llm/internal/tensor"
 )
 
 // ReLULayer applies max(0, x) element-wise and caches its output for

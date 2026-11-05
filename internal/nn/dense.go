@@ -6,7 +6,7 @@ import (
 	"math"
 	"math/rand"
 
-	"m3tal-ai/internal/tensor"
+	"m3tal-llm/internal/tensor"
 )
 
 // Parameter stores trainable values and their accumulated gradients.
