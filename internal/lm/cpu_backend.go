@@ -51,7 +51,7 @@ type cpuInferenceBackend struct {
 func newCPUInferenceBackend(model *Model) inferenceBackend {
 	state := model.parameterView()
 	state = cloneInferenceWeights(state)
-	return &cpuInferenceBackend{config: model.Config, vocab: len(model.Tokenizer.Tokens), state: state}
+	return &cpuInferenceBackend{config: model.Config, vocab: model.VocabSize(), state: state}
 }
 
 func cloneInferenceWeights(src inferenceWeights) inferenceWeights {

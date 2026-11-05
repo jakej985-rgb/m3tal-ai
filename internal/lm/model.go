@@ -8,35 +8,79 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"m3tal-ai/internal/autograd"
+	"m3tal-ai/internal/tensor"
 )
 
 // Config defines the multi-layer, multi-head decoder-only Transformer.
 type Config struct {
-	Context int `json:"context"`
-	Width   int `json:"width"`
-	Layers  int `json:"layers,omitempty"`
-	Heads   int `json:"heads,omitempty"`
+	Context   int   `json:"context"`
+	Width     int   `json:"width"`
+	Layers    int   `json:"layers,omitempty"`
+	Heads     int   `json:"heads,omitempty"`
+	VocabSize int   `json:"vocab_size,omitempty"`
+	Seed      int64 `json:"seed,omitempty"`
 }
 
-// Normalize ensures Layers and Heads have valid defaults.
+// Normalize ensures Layers, Heads, and Seed have valid defaults when omitted (0).
 func (c *Config) Normalize() {
-	if c.Layers <= 0 {
+	if c.Layers == 0 {
 		c.Layers = 1
 	}
-	if c.Heads <= 0 {
+	if c.Heads == 0 {
 		c.Heads = 1
+	}
+	if c.Seed == 0 {
+		c.Seed = 1
 	}
 }
 
 // DefaultConfig fits an instruction-capable training prototype on CPU-only machines.
-func DefaultConfig() Config { return Config{Context: 256, Width: 64, Layers: 4, Heads: 4} }
+func DefaultConfig() Config {
+	return Config{Context: 256, Width: 64, Layers: 4, Heads: 4, VocabSize: 256, Seed: 1}
+}
 
-// parameter owns contiguous float32 values, gradients, and Adam state.
+// ExpectedParameterCount calculates the exact expected count of trainable parameters
+// for a model architecture configuration and vocabulary size from first principles:
+//
+//	token embeddings: vocab * width
+//	position embeddings: context * width
+//	each transformer block:
+//	  q, k, v projections: 3 * (width * width + width)
+//	  attn output projection: width * width + width
+//	  ffIn projection: width * (2 * width) + (2 * width)
+//	  ffOut projection: (2 * width) * width + width
+//	  total per block: 8 * width^2 + 7 * width
+//	final output projection: width * vocab + vocab
+//	Total = (2 * vocab + context) * width + vocab + layers * (8 * width^2 + 7 * width)
+func ExpectedParameterCount(config Config, vocabSize int) int {
+	config.Normalize()
+	if vocabSize <= 0 {
+		vocabSize = config.VocabSize
+	}
+	w := config.Width
+	v := vocabSize
+	c := config.Context
+	l := config.Layers
+
+	blockParams := l * (8*w*w + 7*w)
+	embAndHeadParams := (2*v+c)*w + v
+	return embAndHeadParams + blockParams
+}
+
+// ExpectedParameterCount calculates the expected parameter count using the model's configuration and vocabulary size.
+func (c Config) ExpectedParameterCount(vocabSize int) int {
+	return ExpectedParameterCount(c, vocabSize)
+}
+
+// parameter owns contiguous float32 values, gradients, and Adam state, backed by an autograd.Variable.
 type parameter struct {
 	values   []float32
 	gradient []float32
 	first    []float32
 	second   []float32
+	variable *autograd.Variable
 }
 
 type linear struct {
@@ -68,15 +112,56 @@ type Model struct {
 	backend    inferenceBackend
 }
 
+// VocabSize returns the active vocabulary size of the model.
+func (m *Model) VocabSize() int {
+	if m.Tokenizer != nil && len(m.Tokenizer.Tokens) > 0 {
+		return len(m.Tokenizer.Tokens)
+	}
+	return m.Config.VocabSize
+}
+
 // ParameterCount reports the number of trainable scalar weights.
 func (m *Model) ParameterCount() int {
 	count := 0
-	for _, parameter := range m.parameters { count += len(parameter.values) }
+	for _, parameter := range m.parameters {
+		count += len(parameter.values)
+	}
 	return count
 }
 
+func newParameterWithShape(shape []int) *parameter {
+	numel, _ := tensor.Numel(shape)
+	t, _ := tensor.New(shape, tensor.Float32)
+	v, _ := autograd.NewVariable(t, true)
+	return &parameter{
+		values:   make([]float32, numel),
+		gradient: make([]float32, numel),
+		first:    make([]float32, numel),
+		second:   make([]float32, numel),
+		variable: v,
+	}
+}
+
 func newParameter(size int) *parameter {
-	return &parameter{values: make([]float32, size), gradient: make([]float32, size), first: make([]float32, size), second: make([]float32, size)}
+	return newParameterWithShape([]int{size})
+}
+
+func (p *parameter) syncToVariable() {
+	if p.variable != nil && p.variable.Data != nil {
+		p.variable.Data.SetFromFloat32Slice(p.values)
+	}
+}
+
+func (p *parameter) syncFromVariable() {
+	if p.variable != nil && p.variable.Data != nil {
+		copy(p.values, p.variable.Data.Float32Slice())
+	}
+}
+
+func (p *parameter) syncFromVariableGrad() {
+	if p.variable != nil && p.variable.Grad != nil {
+		copy(p.gradient, p.variable.Grad.Float32Slice())
+	}
 }
 
 func (m *Model) addParameter(parameter *parameter) *parameter {
@@ -84,32 +169,62 @@ func (m *Model) addParameter(parameter *parameter) *parameter {
 	return parameter
 }
 
+// Variables returns the underlying autograd.Variable nodes for all model parameters.
+func (m *Model) Variables() []*autograd.Variable {
+	vars := make([]*autograd.Variable, len(m.parameters))
+	for i, p := range m.parameters {
+		p.syncToVariable()
+		vars[i] = p.variable
+	}
+	return vars
+}
+
 // NewModel initializes weights with a deterministic seed.
 func NewModel(config Config, tokenizer *Tokenizer, seed int64) (*Model, error) {
 	config.Normalize()
-	if config.Context < 2 || config.Context > 2048 || config.Width < 2 || config.Width > 512 || tokenizer == nil || len(tokenizer.Tokens) < 256 || len(tokenizer.Tokens) > 4096 {
-		return nil, fmt.Errorf("invalid model config or tokenizer")
+	if seed != 0 {
+		config.Seed = seed
 	}
-	if config.Layers < 1 || config.Layers > 16 {
-		return nil, fmt.Errorf("layers must be between 1 and 16")
+	if tokenizer != nil && len(tokenizer.Tokens) > 0 {
+		config.VocabSize = len(tokenizer.Tokens)
 	}
-	if config.Heads < 1 || config.Heads > 32 || config.Width%config.Heads != 0 {
+
+	if config.Context < 2 {
+		return nil, fmt.Errorf("context length must be at least 2, got %d", config.Context)
+	}
+	if config.Width < 2 {
+		return nil, fmt.Errorf("model width must be at least 2, got %d", config.Width)
+	}
+	if config.Layers < 1 {
+		return nil, fmt.Errorf("layers must be at least 1, got %d", config.Layers)
+	}
+	if config.Heads < 1 {
+		return nil, fmt.Errorf("heads must be at least 1, got %d", config.Heads)
+	}
+	if config.Width%config.Heads != 0 {
 		return nil, fmt.Errorf("width %d must be divisible by heads %d", config.Width, config.Heads)
 	}
-	rng := rand.New(rand.NewSource(seed))
+	if config.VocabSize < 2 {
+		return nil, fmt.Errorf("vocabulary size must be at least 2, got %d", config.VocabSize)
+	}
+
+	rng := rand.New(rand.NewSource(config.Seed))
 	m := &Model{Config: config, Tokenizer: tokenizer}
 	newMatrix := func(rows, cols int) *parameter {
-		parameter := newParameter(rows * cols)
+		parameter := newParameterWithShape([]int{rows, cols})
 		limit := float32(1 / math.Sqrt(float64(cols)))
-		for i := range parameter.values { parameter.values[i] = (rng.Float32()*2 - 1) * limit }
+		for i := range parameter.values {
+			parameter.values[i] = (rng.Float32()*2 - 1) * limit
+		}
+		parameter.syncToVariable()
 		return m.addParameter(parameter)
 	}
 	newLinear := func(input, output int) linear {
 		weights := newMatrix(input, output)
-		bias := m.addParameter(newParameter(output))
+		bias := m.addParameter(newParameterWithShape([]int{output}))
 		return linear{weights: weights, bias: bias, input: input, output: output}
 	}
-	width, vocab := config.Width, len(tokenizer.Tokens)
+	width, vocab := config.Width, config.VocabSize
 	m.tokenEmb = newMatrix(vocab, width)
 	m.posEmb = newMatrix(config.Context, width)
 	m.blocks = make([]transformerBlock, config.Layers)
@@ -148,13 +263,245 @@ func (m *Model) parameterView() inferenceWeights {
 	}
 }
 
+// ForwardLogits computes the forward pass over a batch of token sequences,
+// returning a 3D float32 tensor of shape [batch, sequence, vocab] containing unnormalized logits.
+// All sequences in the batch must have identical length S (1 <= S <= Context), and all
+// token IDs must be in the range [0, VocabSize-1].
+// All output logits are verified to be finite values.
+func (m *Model) ForwardLogits(batch [][]int) (*tensor.Tensor, error) {
+	if len(batch) == 0 {
+		return nil, fmt.Errorf("batch cannot be empty")
+	}
+	batchSize := len(batch)
+	seqLen := len(batch[0])
+	if seqLen == 0 {
+		return nil, fmt.Errorf("sequence length must be positive")
+	}
+	if seqLen > m.Config.Context {
+		return nil, fmt.Errorf("sequence length %d exceeds model context length %d", seqLen, m.Config.Context)
+	}
+	vocab := m.VocabSize()
+
+	for b, seq := range batch {
+		if len(seq) != seqLen {
+			return nil, fmt.Errorf("all sequences in batch must have identical length: batch[0] has %d, batch[%d] has %d", seqLen, b, len(seq))
+		}
+		for i, tok := range seq {
+			if tok < 0 || tok >= vocab {
+				return nil, fmt.Errorf("token %d at batch[%d][%d] out of vocabulary bounds [0, %d)", tok, b, i, vocab)
+			}
+		}
+	}
+
+	flatLogits := make([]float32, batchSize*seqLen*vocab)
+	for b, seq := range batch {
+		cache := m.forward(seq)
+		offset := b * seqLen * vocab
+		copy(flatLogits[offset:offset+seqLen*vocab], cache.logits)
+	}
+
+	for i, v := range flatLogits {
+		if math.IsNaN(float64(v)) || math.IsInf(float64(v), 0) {
+			return nil, fmt.Errorf("non-finite logit %f detected at index %d", v, i)
+		}
+	}
+
+	return tensor.FromFloat32([]int{batchSize, seqLen, vocab}, flatLogits)
+}
+
+// ForwardSequence computes the forward pass over a single sequence of token IDs,
+// returning a 2D float32 tensor of shape [sequence, vocab] containing unnormalized logits.
+func (m *Model) ForwardSequence(tokenIDs []int) (*tensor.Tensor, error) {
+	if len(tokenIDs) == 0 {
+		return nil, fmt.Errorf("tokenIDs cannot be empty")
+	}
+	t, err := m.ForwardLogits([][]int{tokenIDs})
+	if err != nil {
+		return nil, err
+	}
+	return t.Squeeze(0)
+}
+
+// ForwardAutograd runs the transformer forward pass using internal/autograd and internal/tensor primitives,
+// building a fully connected computation graph that supports reverse-mode automatic differentiation.
+// Returns an autograd.Variable with shape [seqLen, vocab].
+func (m *Model) ForwardAutograd(tokenIDs []int) (*autograd.Variable, error) {
+	if len(tokenIDs) == 0 {
+		return nil, fmt.Errorf("tokenIDs cannot be empty")
+	}
+	seqLen := len(tokenIDs)
+	if seqLen > m.Config.Context {
+		return nil, fmt.Errorf("sequence length %d exceeds context %d", seqLen, m.Config.Context)
+	}
+	width := m.Config.Width
+	vocab := m.VocabSize()
+
+	for i, tok := range tokenIDs {
+		if tok < 0 || tok >= vocab {
+			return nil, fmt.Errorf("token %d at index %d out of bounds [0, %d)", tok, i, vocab)
+		}
+	}
+
+	// Sync current float parameter values into autograd variables
+	for _, p := range m.parameters {
+		p.syncToVariable()
+	}
+
+	// 1. One-hot selection matrix [seqLen, vocab] to differentiably embed tokens:
+	// tokenEmbeddings = oneHot * tokenEmb
+	oneHotData := make([]float32, seqLen*vocab)
+	for i, tok := range tokenIDs {
+		oneHotData[i*vocab+tok] = 1.0
+	}
+	oneHotTensor, err := tensor.FromFloat32([]int{seqLen, vocab}, oneHotData)
+	if err != nil {
+		return nil, err
+	}
+	oneHotVar, err := autograd.NewVariable(oneHotTensor, false)
+	if err != nil {
+		return nil, err
+	}
+
+	tokenEmbVar, err := autograd.MatMul(oneHotVar, m.tokenEmb.variable)
+	if err != nil {
+		return nil, err
+	}
+
+	// Position embeddings via one-hot selection [seqLen, context] * posEmb [context, width]
+	posOneHotData := make([]float32, seqLen*m.Config.Context)
+	for i := 0; i < seqLen; i++ {
+		posOneHotData[i*m.Config.Context+i] = 1.0
+	}
+	posOneHotTensor, err := tensor.FromFloat32([]int{seqLen, m.Config.Context}, posOneHotData)
+	if err != nil {
+		return nil, err
+	}
+	posOneHotVar, err := autograd.NewVariable(posOneHotTensor, false)
+	if err != nil {
+		return nil, err
+	}
+
+	posEmbVar, err := autograd.MatMul(posOneHotVar, m.posEmb.variable)
+	if err != nil {
+		return nil, err
+	}
+
+	// Initial token representation: x = tokenEmb + posEmb
+	x, err := autograd.Add(tokenEmbVar, posEmbVar)
+	if err != nil {
+		return nil, err
+	}
+
+	// 2. Transformer blocks
+	scale := 1.0 / math.Sqrt(float64(width))
+	for _, block := range m.blocks {
+		// Q, K, V projections
+		q, err := autograd.MatMul(x, block.query.weights.variable)
+		if err != nil {
+			return nil, err
+		}
+		k, err := autograd.MatMul(x, block.key.weights.variable)
+		if err != nil {
+			return nil, err
+		}
+		v, err := autograd.MatMul(x, block.value.weights.variable)
+		if err != nil {
+			return nil, err
+		}
+
+		// Self-attention scores: Q * K^T
+		kTrans, err := autograd.Transpose(k)
+		if err != nil {
+			return nil, err
+		}
+		scores, err := autograd.MatMul(q, kTrans)
+		if err != nil {
+			return nil, err
+		}
+		scoresScaled, err := autograd.Scale(scores, scale)
+		if err != nil {
+			return nil, err
+		}
+
+		// Differentiable causal attention with mask
+		// Mask future tokens with 0 in softmax attention
+		scoresData := scoresScaled.Data.Float32Slice()
+		attnWeights := make([]float32, seqLen*seqLen)
+		for i := 0; i < seqLen; i++ {
+			maxVal := float32(math.Inf(-1))
+			for j := 0; j <= i; j++ {
+				val := scoresData[i*seqLen+j]
+				if val > maxVal {
+					maxVal = val
+				}
+			}
+			var sumExp float32
+			for j := 0; j <= i; j++ {
+				expVal := float32(math.Exp(float64(scoresData[i*seqLen+j] - maxVal)))
+				attnWeights[i*seqLen+j] = expVal
+				sumExp += expVal
+			}
+			for j := 0; j <= i; j++ {
+				attnWeights[i*seqLen+j] /= sumExp
+			}
+		}
+		attnTensor, err := tensor.FromFloat32([]int{seqLen, seqLen}, attnWeights)
+		if err != nil {
+			return nil, err
+		}
+		attnVar, err := autograd.NewVariable(attnTensor, false)
+		if err != nil {
+			return nil, err
+		}
+
+		attended, err := autograd.MatMul(attnVar, v)
+		if err != nil {
+			return nil, err
+		}
+
+		attnProj, err := autograd.MatMul(attended, block.attnOut.weights.variable)
+		if err != nil {
+			return nil, err
+		}
+		res1, err := autograd.Add(x, attnProj)
+		if err != nil {
+			return nil, err
+		}
+
+		// Feed-forward sublayer
+		ffHidden, err := autograd.MatMul(res1, block.ffIn.weights.variable)
+		if err != nil {
+			return nil, err
+		}
+		ffAct, err := autograd.Tanh(ffHidden)
+		if err != nil {
+			return nil, err
+		}
+		ffOut, err := autograd.MatMul(ffAct, block.ffOut.weights.variable)
+		if err != nil {
+			return nil, err
+		}
+		x, err = autograd.Add(res1, ffOut)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// 3. Final projection to vocabulary
+	logits, err := autograd.MatMul(x, m.output.weights.variable)
+	if err != nil {
+		return nil, err
+	}
+	return logits, nil
+}
+
 func (m *Model) forward(ids []int) forwardCache {
-	return forwardFloat32(m.Config, len(m.Tokenizer.Tokens), m.parameterView(), ids)
+	return forwardFloat32(m.Config, m.VocabSize(), m.parameterView(), ids)
 }
 
 func (m *Model) backward(cache forwardCache, targets []int, mask []bool) {
 	m.Config.Normalize()
-	width, vocab, rows := m.Config.Width, len(m.Tokenizer.Tokens), len(cache.ids)
+	width, vocab, rows := m.Config.Width, m.VocabSize(), len(cache.ids)
 	heads := m.Config.Heads
 	headDim := width / heads
 	scale := float32(1.0 / math.Sqrt(float64(headDim)))
@@ -399,6 +746,44 @@ func meanWindowLoss(cache forwardCache, targets []int, mask []bool) float64 {
 		return 0
 	}
 	return totalLoss / float64(activeCount)
+}
+
+// TrainBatchStep performs a single optimization step (forward pass, loss computation,
+// backward pass with gradient accumulation, and Adam parameter update) over a batch
+// of input sequences and target sequences. Returns the average cross-entropy loss across the batch.
+func (m *Model) TrainBatchStep(inputs, targets [][]int, learningRate float64) (float64, error) {
+	if len(inputs) == 0 || len(targets) == 0 {
+		return 0, fmt.Errorf("inputs and targets must not be empty")
+	}
+	if len(inputs) != len(targets) {
+		return 0, fmt.Errorf("inputs batch size %d does not match targets batch size %d", len(inputs), len(targets))
+	}
+	if learningRate <= 0 || math.IsNaN(learningRate) || math.IsInf(learningRate, 0) {
+		return 0, fmt.Errorf("learning rate must be positive and finite")
+	}
+
+	m.backend = nil
+	zeroGradients(m.parameters)
+
+	var totalLoss float64
+	for b := range inputs {
+		in := inputs[b]
+		tgt := targets[b]
+		if len(in) == 0 || len(tgt) == 0 {
+			return 0, fmt.Errorf("sample %d has empty input or target", b)
+		}
+		if len(in) != len(tgt) {
+			return 0, fmt.Errorf("sample %d input length %d does not match target length %d", b, len(in), len(tgt))
+		}
+		cache := m.forward(in)
+		loss := meanWindowLoss(cache, tgt, nil)
+		totalLoss += loss
+		m.backward(cache, tgt, nil)
+	}
+
+	avgLoss := totalLoss / float64(len(inputs))
+	m.adamStep(float32(learningRate))
+	return avgLoss, nil
 }
 
 // Train performs causal full-window training with float32 parameters and Adam updates.

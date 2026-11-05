@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"unicode/utf8"
+
+	"m3tal-ai/internal/autograd"
 )
 
 func TestTokenizerRoundTripsUTF8(t *testing.T) {
@@ -344,6 +346,364 @@ func BenchmarkGenerate10Tokens(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		if _, err := model.Generate("benchmark", 10, 0.8, int64(i)); err != nil {
 			b.Fatal(err)
+		}
+	}
+}
+
+func TestModelConfigAndInitialization(t *testing.T) {
+	// Test validation of invalid configurations
+	invalidConfigs := []struct {
+		name string
+		cfg  Config
+		seed int64
+	}{
+		{"context < 2", Config{Context: 1, Width: 16, Layers: 2, Heads: 2, VocabSize: 16}, 1},
+		{"width < 2", Config{Context: 8, Width: 1, Layers: 2, Heads: 1, VocabSize: 16}, 1},
+		{"layers < 0", Config{Context: 8, Width: 16, Layers: -1, Heads: 2, VocabSize: 16}, 1},
+		{"heads < 0", Config{Context: 8, Width: 16, Layers: 2, Heads: -1, VocabSize: 16}, 1},
+		{"width not divisible by heads", Config{Context: 8, Width: 15, Layers: 2, Heads: 4, VocabSize: 16}, 1},
+		{"vocab < 2", Config{Context: 8, Width: 16, Layers: 2, Heads: 2, VocabSize: 1}, 1},
+	}
+
+	for _, tc := range invalidConfigs {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := NewModel(tc.cfg, nil, tc.seed)
+			if err == nil {
+				t.Fatalf("expected error for %s, got nil", tc.name)
+			}
+		})
+	}
+
+	// Test deterministic initialization: same seed produces identical weights
+	cfg := Config{Context: 16, Width: 16, Layers: 2, Heads: 2, VocabSize: 32}
+	m1, err := NewModel(cfg, nil, 12345)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m2, err := NewModel(cfg, nil, 12345)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m3, err := NewModel(cfg, nil, 54321)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	p1 := m1.ParametersInfo()
+	p2 := m2.ParametersInfo()
+	p3 := m3.ParametersInfo()
+
+	if len(p1) != len(p2) || len(p1) != len(p3) {
+		t.Fatalf("parameter slice count mismatch: %d vs %d vs %d", len(p1), len(p2), len(p3))
+	}
+
+	for i := range p1 {
+		for j := range p1[i].Values {
+			if p1[i].Values[j] != p2[i].Values[j] {
+				t.Fatalf("m1 and m2 weights differ at parameter %s[%d]: %f != %f", p1[i].Name, j, p1[i].Values[j], p2[i].Values[j])
+			}
+		}
+	}
+
+	// m1 and m3 should have different weights
+	diffCount := 0
+	for i := range p1 {
+		for j := range p1[i].Values {
+			if p1[i].Values[j] != p3[i].Values[j] {
+				diffCount++
+			}
+		}
+	}
+	if diffCount == 0 {
+		t.Fatal("expected models with different seeds to have differing initial weights")
+	}
+
+	// Verify no arbitrary caps: e.g. Context > 2048, Width > 512, Layers > 16 works if specified
+	largeCfg := Config{Context: 4096, Width: 64, Layers: 1, Heads: 4, VocabSize: 32}
+	if _, err := NewModel(largeCfg, nil, 1); err != nil {
+		t.Fatalf("NewModel rejected large context (>2048): %v", err)
+	}
+}
+
+func TestModelParameterCounts(t *testing.T) {
+	testCases := []struct {
+		cfg   Config
+		vocab int
+	}{
+		{Config{Context: 8, Width: 4, Layers: 1, Heads: 1}, 16},
+		{Config{Context: 16, Width: 8, Layers: 2, Heads: 2}, 32},
+		{Config{Context: 64, Width: 16, Layers: 3, Heads: 4}, 64},
+		{Config{Context: 256, Width: 64, Layers: 4, Heads: 4}, 256},
+		{Config{Context: 128, Width: 32, Layers: 6, Heads: 8, VocabSize: 128}, 128},
+	}
+
+	for _, tc := range testCases {
+		tc.cfg.VocabSize = tc.vocab
+		model, err := NewModel(tc.cfg, nil, 42)
+		if err != nil {
+			t.Fatalf("NewModel failed for %+v: %v", tc.cfg, err)
+		}
+
+		expected := ExpectedParameterCount(tc.cfg, tc.vocab)
+		actual := model.ParameterCount()
+		if actual != expected {
+			t.Fatalf("Parameter count mismatch for %+v: actual %d != expected %d", tc.cfg, actual, expected)
+		}
+	}
+}
+
+func TestModelForwardLogitsShapeAndFiniteness(t *testing.T) {
+	cfg := Config{Context: 16, Width: 16, Layers: 2, Heads: 4, VocabSize: 32}
+	model, err := NewModel(cfg, nil, 99)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	batch := [][]int{
+		{1, 2, 3, 4, 5},
+		{6, 7, 8, 9, 10},
+		{11, 12, 13, 14, 15},
+	}
+
+	logitsTensor, err := model.ForwardLogits(batch)
+	if err != nil {
+		t.Fatalf("ForwardLogits failed: %v", err)
+	}
+
+	expectedShape := []int{3, 5, 32}
+	if len(logitsTensor.Shape()) != 3 {
+		t.Fatalf("expected 3D tensor, got shape %v", logitsTensor.Shape())
+	}
+	for i := range expectedShape {
+		if logitsTensor.Shape()[i] != expectedShape[i] {
+			t.Fatalf("expected shape %v, got %v", expectedShape, logitsTensor.Shape())
+		}
+	}
+
+	// Check finiteness of all elements
+	flatLogits := logitsTensor.Float32Slice()
+	for i, val := range flatLogits {
+		if math.IsNaN(float64(val)) || math.IsInf(float64(val), 0) {
+			t.Fatalf("non-finite logit at index %d: %f", i, val)
+		}
+	}
+
+	// Single sequence forward
+	seqLogits, err := model.ForwardSequence([]int{1, 2, 3, 4, 5})
+	if err != nil {
+		t.Fatalf("ForwardSequence failed: %v", err)
+	}
+	if len(seqLogits.Shape()) != 2 || seqLogits.Shape()[0] != 5 || seqLogits.Shape()[1] != 32 {
+		t.Fatalf("expected shape [5, 32], got %v", seqLogits.Shape())
+	}
+
+	// Error handling: mismatched sequence length
+	badBatch := [][]int{
+		{1, 2, 3},
+		{1, 2},
+	}
+	if _, err := model.ForwardLogits(badBatch); err == nil {
+		t.Fatal("expected error for mismatched sequence lengths in batch")
+	}
+
+	// Error handling: token out of bounds
+	oobBatch := [][]int{
+		{1, 2, 999},
+	}
+	if _, err := model.ForwardLogits(oobBatch); err == nil {
+		t.Fatal("expected error for token out of vocabulary bounds")
+	}
+}
+
+func TestCausalMaskingPreventsFutureLeakage(t *testing.T) {
+	cfg := Config{Context: 16, Width: 16, Layers: 2, Heads: 2, VocabSize: 32}
+	model, err := NewModel(cfg, nil, 123)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Baseline input: [5, 10, 15, 20]
+	input1 := []int{5, 10, 15, 20}
+	t1, err := model.ForwardSequence(input1)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Input 2: change future token at index 3: [5, 10, 15, 25]
+	input2 := []int{5, 10, 15, 25}
+	t2, err := model.ForwardSequence(input2)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	vocab := cfg.VocabSize
+	slice1 := t1.Float32Slice()
+	slice2 := t2.Float32Slice()
+
+	// Check position 0, 1, 2 logits: MUST BE IDENTICAL
+	for pos := 0; pos < 3; pos++ {
+		for v := 0; v < vocab; v++ {
+			idx := pos*vocab + v
+			if slice1[idx] != slice2[idx] {
+				t.Fatalf("causal leakage! position %d logit for token %d changed when modifying future token at index 3: %f vs %f", pos, v, slice1[idx], slice2[idx])
+			}
+		}
+	}
+
+	// Position 3 logits CAN and SHOULD differ because the token at position 3 is different
+	diffAt3 := false
+	for v := 0; v < vocab; v++ {
+		idx := 3*vocab + v
+		if slice1[idx] != slice2[idx] {
+			diffAt3 = true
+			break
+		}
+	}
+	if !diffAt3 {
+		t.Fatal("expected position 3 logits to differ when position 3 token changed")
+	}
+
+	// Input 3: change past token at index 1: [5, 9, 15, 20]
+	input3 := []int{5, 9, 15, 20}
+	t3, err := model.ForwardSequence(input3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	slice3 := t3.Float32Slice()
+
+	// Position 0 logits must remain identical (only depends on token at pos 0)
+	for v := 0; v < vocab; v++ {
+		if slice1[v] != slice3[v] {
+			t.Fatalf("position 0 logit changed when modifying token at pos 1: %f vs %f", slice1[v], slice3[v])
+		}
+	}
+
+	// Position 1 logits should differ (past token 1 changed)
+	diffAt1 := false
+	for v := 0; v < vocab; v++ {
+		idx := 1*vocab + v
+		if slice1[idx] != slice3[idx] {
+			diffAt1 = true
+			break
+		}
+	}
+	if !diffAt1 {
+		t.Fatal("expected position 1 logits to change when position 1 token changed")
+	}
+}
+
+func TestForwardAutogradGraph(t *testing.T) {
+	cfg := Config{Context: 8, Width: 8, Layers: 1, Heads: 2, VocabSize: 8}
+	model, err := NewModel(cfg, nil, 42)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tokenIDs := []int{1, 2, 3, 4}
+	logitsVar, err := model.ForwardAutograd(tokenIDs)
+	if err != nil {
+		t.Fatalf("ForwardAutograd failed: %v", err)
+	}
+
+	if logitsVar.Shape()[0] != 4 || logitsVar.Shape()[1] != 8 {
+		t.Fatalf("expected shape [4, 8], got %v", logitsVar.Shape())
+	}
+
+	// Verify Variables accessor
+	vars := model.Variables()
+	if len(vars) != len(model.parameters) {
+		t.Fatalf("expected %d variables, got %d", len(model.parameters), len(vars))
+	}
+	for i, v := range vars {
+		if v == nil || v.Data == nil {
+			t.Fatalf("nil variable or data at index %d", i)
+		}
+	}
+
+	// Verify reverse-mode automatic differentiation through the autograd computation graph
+	lossVar, err := autograd.Sum(logitsVar)
+	if err != nil {
+		t.Fatalf("Sum failed: %v", err)
+	}
+	if err := lossVar.Backward(); err != nil {
+		t.Fatalf("Backward on autograd graph failed: %v", err)
+	}
+
+	// Output weights must receive gradients via backward
+	if model.output.weights.variable.Grad == nil {
+		t.Fatal("expected output weights variable to have non-nil gradient after Backward")
+	}
+	hasNonZeroGrad := false
+	for _, g := range model.output.weights.variable.Grad.Float32Slice() {
+		if g != 0 {
+			hasNonZeroGrad = true
+			break
+		}
+	}
+	if !hasNonZeroGrad {
+		t.Fatal("expected non-zero gradient in output weights after backward pass")
+	}
+}
+
+func TestTinyModelOverfitsSyntheticBatch(t *testing.T) {
+	cfg := Config{Context: 8, Width: 16, Layers: 1, Heads: 2, VocabSize: 8}
+	model, err := NewModel(cfg, nil, 777)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Synthetic batch of 2 sequences
+	batchInputs := [][]int{
+		{1, 2, 3, 4},
+		{2, 3, 4, 5},
+	}
+	batchTargets := [][]int{
+		{2, 3, 4, 1},
+		{3, 4, 5, 2},
+	}
+
+	// Initial loss
+	initialLoss, err := model.TrainBatchStep(batchInputs, batchTargets, 0.05)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Train for 80 steps
+	var finalLoss float64
+	for step := 0; step < 80; step++ {
+		loss, err := model.TrainBatchStep(batchInputs, batchTargets, 0.05)
+		if err != nil {
+			t.Fatalf("step %d failed: %v", step, err)
+		}
+		finalLoss = loss
+	}
+
+	if finalLoss >= initialLoss*0.1 {
+		t.Fatalf("expected overfit loss to drop below 10%% of initial loss (from %f to < %f), got %f", initialLoss, initialLoss*0.1, finalLoss)
+	}
+
+	// Verify next-token prediction accuracy on the synthetic batch is 100%
+	for b := range batchInputs {
+		tLogits, err := model.ForwardSequence(batchInputs[b])
+		if err != nil {
+			t.Fatal(err)
+		}
+		flat := tLogits.Float32Slice()
+		vocab := cfg.VocabSize
+		for pos := 0; pos < len(batchTargets[b]); pos++ {
+			bestTok := 0
+			bestLogit := float32(math.Inf(-1))
+			for v := 0; v < vocab; v++ {
+				logit := flat[pos*vocab+v]
+				if logit > bestLogit {
+					bestLogit = logit
+					bestTok = v
+				}
+			}
+			expectedTok := batchTargets[b][pos]
+			if bestTok != expectedTok {
+				t.Fatalf("sample %d pos %d: predicted token %d != target %d (final loss %f)", b, pos, bestTok, expectedTok, finalLoss)
+			}
 		}
 	}
 }
