@@ -19,3 +19,4 @@ data/tinystories-ds/
 
 # CUDA kernel objects built by go generate
 internal/gpu/kernels_*.o
+m3tal-lm
