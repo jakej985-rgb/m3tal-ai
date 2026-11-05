@@ -72,7 +72,8 @@ type Model struct {
 	blocks     []transformerBlock
 	output     linear
 	parameters []*parameter
-	step       int
+	step       int64
+	seed       int64
 	backend    inferenceBackend
 }
 
@@ -115,7 +116,7 @@ func NewModel(config Config, tokenizer *Tokenizer, seed int64) (*Model, error) {
 		return nil, fmt.Errorf("width %d must be divisible by heads %d", config.Width, config.Heads)
 	}
 	rng := rand.New(rand.NewSource(seed))
-	m := &Model{Config: config, Tokenizer: tokenizer}
+	m := &Model{Config: config, Tokenizer: tokenizer, seed: seed}
 	newMatrix := func(rows, cols int) *parameter {
 		p := newParameter(rows * cols)
 		limit := float32(1 / math.Sqrt(float64(cols)))
@@ -415,7 +416,12 @@ func zeroGradients(parameters []*parameter) {
 	}
 }
 
-func (m *Model) adamStep(learningRate float32) {
+func (m *Model) adamStep(learningRate float32) { m.adamStepLR(learningRate, 1.0) }
+
+// adamStepLR applies one Adam update with the given learning rate and
+// global gradient-norm clip threshold. It returns the pre-clip gradient
+// norm for logging.
+func (m *Model) adamStepLR(learningRate float32, clipNorm float64) float64 {
 	m.step++
 	beta1, beta2 := float32(0.9), float32(0.999)
 	bias1 := float32(1 - math.Pow(float64(beta1), float64(m.step)))
@@ -427,9 +433,10 @@ func (m *Model) adamStep(learningRate float32) {
 			totalNormSq += float64(g * g)
 		}
 	}
+	gradNorm := math.Sqrt(totalNormSq)
 	clipScale := float32(1.0)
-	if gradNorm := math.Sqrt(totalNormSq); gradNorm > 1.0 {
-		clipScale = float32(1.0 / gradNorm)
+	if gradNorm > clipNorm {
+		clipScale = float32(clipNorm / gradNorm)
 	}
 
 	for _, p := range m.parameters {
@@ -442,6 +449,7 @@ func (m *Model) adamStep(learningRate float32) {
 			p.values[i] -= learningRate * first / (float32(math.Sqrt(float64(second))) + 1e-8)
 		}
 	}
+	return gradNorm
 }
 
 func tokenLoss32(logits []float32, target int) float64 {
@@ -728,7 +736,6 @@ func (m *Model) GenerateWithOptions(prompt string, opts GenerateOptions) (string
 	return strings.ToValidUTF8(string(prefix), ""), nil
 }
 
-
 // Generate samples tokens at the requested temperature using deterministic
 // seeded sampling with a 1.15 repetition penalty.
 func (m *Model) Generate(prompt string, maxTokens int, temperature float64, seed int64) (string, error) {
@@ -806,21 +813,41 @@ func appendString(prefix []byte, suffix string) []byte {
 
 // checkpoint is the on-disk format. All learnable parameters are stored as a
 // flat float64 slice in the same order that NewModel allocates them.
+// FormatVersion 2 adds training metadata (step, seed, tokenizer fingerprint)
+// and optional Adam optimizer state so interrupted runs can resume.
 type checkpoint struct {
-	Config Config            `json:"config"`
-	Tokens [][]byte          `json:"tokens"`
-	Merges []checkpointMerge `json:"merges"`
-	Values []float64         `json:"values"`
+	FormatVersion int               `json:"format_version,omitempty"`
+	Config        Config            `json:"config"`
+	Tokens        [][]byte          `json:"tokens"`
+	Merges        []checkpointMerge `json:"merges"`
+	Values        []float64         `json:"values"`
+	Step          int64             `json:"step,omitempty"`
+	Seed          int64             `json:"seed,omitempty"`
+	TokenizerHash string            `json:"tokenizer_hash,omitempty"`
+	Optimizer     *optimizerState   `json:"optimizer,omitempty"`
+}
+
+// optimizerState stores Adam first/second moments aligned with Values order.
+type optimizerState struct {
+	First  []float64 `json:"first"`
+	Second []float64 `json:"second"`
 }
 
 type checkpointMerge struct{ Left, Right, Token []byte }
 
-// SaveCheckpoint writes tokenizer and float32 weights to a local JSON checkpoint.
+// SaveCheckpoint writes tokenizer, weights, and training state (optimizer
+// moments, step count, seed) to a local JSON checkpoint. The format is
+// backward compatible: older readers ignore the added fields, and older
+// checkpoints load with zeroed optimizer state.
 func (m *Model) SaveCheckpoint(path string) error {
 	state := checkpoint{
-		Config: m.Config,
-		Tokens: make([][]byte, len(m.Tokenizer.Tokens)),
-		Merges: make([]checkpointMerge, len(m.Tokenizer.Merges)),
+		FormatVersion: 2,
+		Config:        m.Config,
+		Step:          m.step,
+		Seed:          m.seed,
+		TokenizerHash: TokenizerFingerprint(m.Tokenizer),
+		Tokens:        make([][]byte, len(m.Tokenizer.Tokens)),
+		Merges:        make([]checkpointMerge, len(m.Tokenizer.Merges)),
 	}
 	for i, token := range m.Tokenizer.Tokens {
 		state.Tokens[i] = []byte(token)
@@ -833,6 +860,14 @@ func (m *Model) SaveCheckpoint(path string) error {
 			state.Values = append(state.Values, float64(v))
 		}
 	}
+	opt := &optimizerState{First: make([]float64, 0, len(state.Values)), Second: make([]float64, 0, len(state.Values))}
+	for _, p := range m.parameters {
+		for i := range p.values {
+			opt.First = append(opt.First, float64(p.first[i]))
+			opt.Second = append(opt.Second, float64(p.second[i]))
+		}
+	}
+	state.Optimizer = opt
 	data, err := json.Marshal(state)
 	if err != nil {
 		return err
@@ -868,6 +903,9 @@ func LoadCheckpoint(path string) (*Model, error) {
 		tokenizer.Merges[i] = Merge{string(merge.Left), string(merge.Right), string(merge.Token)}
 	}
 	tokenizer.reindex()
+	if state.TokenizerHash != "" && TokenizerFingerprint(tokenizer) != state.TokenizerHash {
+		return nil, fmt.Errorf("checkpoint tokenizer hash %q does not match serialized tokenizer", state.TokenizerHash)
+	}
 	model, err := NewModel(state.Config, tokenizer, 1)
 	if err != nil {
 		return nil, err
@@ -880,6 +918,26 @@ func LoadCheckpoint(path string) (*Model, error) {
 		for i := range p.values {
 			p.values[i] = float32(state.Values[index])
 			index++
+		}
+	}
+	if state.Step != 0 {
+		model.step = state.Step
+	}
+	if state.Seed != 0 {
+		model.seed = state.Seed
+	}
+	if state.Optimizer != nil {
+		if len(state.Optimizer.First) != model.ParameterCount() || len(state.Optimizer.Second) != model.ParameterCount() {
+			return nil, fmt.Errorf("checkpoint optimizer state has %d/%d moments; model requires %d",
+				len(state.Optimizer.First), len(state.Optimizer.Second), model.ParameterCount())
+		}
+		idx := 0
+		for _, p := range model.parameters {
+			for i := range p.values {
+				p.first[i] = float32(state.Optimizer.First[idx])
+				p.second[i] = float32(state.Optimizer.Second[idx])
+				idx++
+			}
 		}
 	}
 	return model, nil

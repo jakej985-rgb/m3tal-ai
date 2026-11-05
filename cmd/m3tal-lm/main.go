@@ -19,9 +19,11 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: go run ./cmd/m3tal-lm train|eval|generate|instructions [flags]")
+		return fmt.Errorf("usage: go run ./cmd/m3tal-lm train|eval|generate|instructions|dataset [flags]")
 	}
 	switch args[0] {
+	case "dataset":
+		return runDataset(args[1:])
 	case "train":
 		flags := flag.NewFlagSet("train", flag.ContinueOnError)
 		corpusArg := flags.String("corpus", "", "text file or path-list of directories containing training text")
@@ -41,6 +43,13 @@ func run(args []string) error {
 		heads := flags.Int("heads", 4, "number of attention heads (must divide width)")
 		seed := flags.Int64("seed", 17, "deterministic initialization seed")
 		learningRate := flags.Float64("learning-rate", 0.001, "Adam learning rate")
+		datasetArg := flags.String("dataset", "", "sharded token dataset directory (built via 'dataset build')")
+		orderArg := flags.String("order", "sequential", "dataset shard order: sequential or shuffled")
+		maxSteps := flags.Int64("max-steps", 0, "optimizer steps to run (0 = until data exhausted)")
+		logEvery := flags.Int64("log-every", 20, "log metrics every N steps (0 = silent)")
+		warmup := flags.Int64("warmup-steps", 0, "linear LR warmup steps")
+		minLRRatio := flags.Float64("min-lr-ratio", 0.1, "cosine LR decay floor as fraction of peak")
+		gradClip := flags.Float64("grad-clip", 1.0, "global gradient-norm clip threshold")
 		if err := flags.Parse(args[1:]); err != nil {
 			return err
 		}
@@ -129,11 +138,73 @@ func run(args []string) error {
 		var err error
 		if *instructMode {
 			losses, err = model.TrainInstructions(lm.DefaultInstructionSet(), *epochs, *steps, *learningRate)
+		} else if strings.TrimSpace(*datasetArg) != "" {
+			ds, err := lm.OpenDataset(*datasetArg)
+			if err != nil {
+				return fmt.Errorf("open dataset: %w", err)
+			}
+			if fp := lm.TokenizerFingerprint(model.Tokenizer); fp != ds.Meta.Tokenizer {
+				return fmt.Errorf("dataset tokenizer fingerprint %s does not match model tokenizer %s", ds.Meta.Tokenizer, fp)
+			}
+			var order lm.TokenOrder
+			switch *orderArg {
+			case "sequential":
+				order = lm.Sequential
+			case "shuffled":
+				order = lm.ShuffledSeeded
+			default:
+				return fmt.Errorf("--order must be sequential or shuffled")
+			}
+			maxSteps := *maxSteps
+			if maxSteps == 0 {
+				maxSteps = int64(*epochs) * int64(*steps)
+			}
+			stream := lm.NewTokenStream(ds, order, *seed)
+			cfg := lm.TrainConfig{
+				MaxSteps:     maxSteps,
+				LearningRate: *learningRate,
+				WarmupSteps:  *warmup,
+				MinLRRatio:   *minLRRatio,
+				GradClip:     *gradClip,
+				LogEvery:     *logEvery,
+				Seed:         *seed,
+			}
+			loss, err := model.TrainStream(stream, cfg, func(m lm.TrainMetrics) {
+				fmt.Printf("step %d loss %.4f lr %.2e tok/s %.0f grad %.3f\n",
+					m.Step, m.Loss, m.LearningRate, m.TokensPerSec, m.GradNorm)
+			})
+			if err != nil {
+				return fmt.Errorf("train: %w", err)
+			}
+			losses = []float64{loss}
 		} else {
 			if len(texts) == 0 {
-				return fmt.Errorf("no training texts available; provide --corpus")
+				return fmt.Errorf("no training texts available; provide --corpus or --dataset")
 			}
-			losses, err = model.Train(texts, *epochs, *steps, *learningRate)
+			var tokens []uint32
+			for _, text := range texts {
+				for _, id := range model.Tokenizer.Encode(text) {
+					tokens = append(tokens, uint32(id))
+				}
+			}
+			source := lm.NewSliceSource(tokens)
+			cfg := lm.TrainConfig{
+				MaxSteps:     int64(*epochs) * int64(*steps),
+				LearningRate: *learningRate,
+				WarmupSteps:  *warmup,
+				MinLRRatio:   *minLRRatio,
+				GradClip:     *gradClip,
+				LogEvery:     *logEvery,
+				Seed:         *seed,
+			}
+			loss, err := model.TrainStream(source, cfg, func(m lm.TrainMetrics) {
+				fmt.Printf("step %d loss %.4f lr %.2e tok/s %.0f grad %.3f\n",
+					m.Step, m.Loss, m.LearningRate, m.TokensPerSec, m.GradNorm)
+			})
+			if err != nil {
+				return fmt.Errorf("train: %w", err)
+			}
+			losses = []float64{loss}
 		}
 		if err != nil {
 			return err
@@ -215,5 +286,61 @@ func run(args []string) error {
 		return nil
 	default:
 		return fmt.Errorf("unknown command %q; use train, eval, generate, or instructions", args[0])
+	}
+}
+
+// runDataset implements the "dataset" subcommand for building sharded token
+// datasets from a text corpus using a checkpoint's tokenizer.
+func runDataset(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: m3tal-lm dataset build --corpus PATHS --checkpoint CKPT --out DIR [--shard-tokens N] [--seed N]")
+	}
+	switch args[0] {
+	case "build":
+		flags := flag.NewFlagSet("dataset build", flag.ContinueOnError)
+		corpusArg := flags.String("corpus", "", "comma-separated corpus file paths")
+		checkpoint := flags.String("checkpoint", "models/m3tal-small.json", "checkpoint providing the tokenizer")
+		outDir := flags.String("out", "", "output dataset directory")
+		shardTokensFlag := flags.Int64("shard-tokens", 0, "tokens per shard (0 = single shard)")
+		if err := flags.Parse(args[1:]); err != nil {
+			return err
+		}
+		if strings.TrimSpace(*corpusArg) == "" || strings.TrimSpace(*outDir) == "" {
+			return fmt.Errorf("--corpus and --out are required")
+		}
+		var paths []string
+		for _, p := range strings.Split(*corpusArg, ",") {
+			if p = strings.TrimSpace(p); p != "" {
+				paths = append(paths, p)
+			}
+		}
+		texts, err := lm.LoadCorpus(paths)
+		if err != nil {
+			return err
+		}
+		model, err := lm.LoadCheckpoint(*checkpoint)
+		if err != nil {
+			return fmt.Errorf("load checkpoint tokenizer: %w", err)
+		}
+		var tokens []uint32
+		for _, text := range texts {
+			for _, id := range model.Tokenizer.Encode(text) {
+				tokens = append(tokens, uint32(id))
+			}
+		}
+		source := lm.NewSliceSource(tokens)
+		shardTokens := int(*shardTokensFlag)
+		if shardTokens <= 0 {
+			shardTokens = len(tokens)
+		}
+		meta, err := lm.BuildDataset(*outDir, source, model.Tokenizer, shardTokens)
+		if err != nil {
+			return fmt.Errorf("build dataset: %w", err)
+		}
+		fmt.Printf("wrote dataset to %s: %d shards, %d tokens, tokenizer %s\n",
+			*outDir, meta.ShardCount, meta.TotalTokens, meta.Tokenizer)
+		return nil
+	default:
+		return fmt.Errorf("unknown dataset subcommand %q; use build", args[0])
 	}
 }

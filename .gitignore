@@ -13,3 +13,6 @@
 coverage.txt
 .m3tal-review/
 models/
+
+# Built token datasets (large binary shards)
+data/tinystories-ds/

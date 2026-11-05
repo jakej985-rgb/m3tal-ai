@@ -610,4 +610,3 @@ func ValidatePlanJSON(completion string) error {
 	}
 	return nil
 }
-
