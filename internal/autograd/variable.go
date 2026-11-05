@@ -267,6 +267,43 @@ func topologicalSort(root *Variable) ([]*Variable, error) {
 	return order, nil
 }
 
+// NewOpVariable creates a new Variable resulting from an operation, registering parents and backward function.
+func NewOpVariable(data *tensor.Tensor, parents []*Variable, backward func() error) *Variable {
+	requiresGrad := false
+	validParents := make([]*Variable, 0, len(parents))
+	for _, p := range parents {
+		if p != nil {
+			if p.RequiresGrad {
+				requiresGrad = true
+			}
+			validParents = append(validParents, p)
+		}
+	}
+	v := &Variable{
+		Data:         data,
+		RequiresGrad: requiresGrad,
+		parents:      validParents,
+		backward:     backward,
+	}
+	return v
+}
+
+// OnBackward attaches an additional callback to be run during the backward pass of v.
+func (v *Variable) OnBackward(cb func() error) {
+	orig := v.backward
+	v.backward = func() error {
+		if orig != nil {
+			if err := orig(); err != nil {
+				return err
+			}
+		}
+		if cb != nil {
+			return cb()
+		}
+		return nil
+	}
+}
+
 // flatToIndices converts a flat linear element index into N-D coordinate indices.
 func flatToIndices(flat int, shape []int) ([]int, error) {
 	if len(shape) == 0 {
