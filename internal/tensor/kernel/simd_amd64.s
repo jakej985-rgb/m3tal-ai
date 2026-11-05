@@ -75,52 +75,6 @@ mdone:
 	VZEROUPPER
 	RET
 
-// func dotFloat32AVX2Asm(a, b unsafe.Pointer, n int) float32
-TEXT ·dotFloat32AVX2Asm(SB), NOSPLIT, $0-28
-	MOVQ a+0(FP), SI
-	MOVQ b+8(FP), DX
-	MOVQ n+16(FP), CX
-
-	VXORPS Y0, Y0, Y0 // accumulator
-
-dloop8:
-	CMPQ CX, $8
-	JL dtail
-	VMOVUPS (SI), Y1
-	VMOVUPS (DX), Y2
-	VFMADD231PS Y1, Y2, Y0 // Y0 = Y0 + (Y1 * Y2)
-	ADDQ $32, SI
-	ADDQ $32, DX
-	SUBQ $8, CX
-	JMP dloop8
-
-dtail:
-	// Horizontal add of Y0:
-	// Extract high 128 to X1, add with low 128 (X0)
-	VEXTRACTF128 $1, Y0, X1
-	VADDPS X1, X0, X0
-	// Now X0 has 4 floats: [a, b, c, d]
-	VMOVHLPS X0, X1, X1 // X1 = [c, d, ?, ?]
-	VADDPS X1, X0, X0   // X0 = [a+c, b+d, ...]
-	VSHUFPS $1, X0, X0, X1 // X1 = [b+d, ...]
-	ADDSS X1, X0        // X0 = (a+c) + (b+d)
-
-dscalar:
-	CMPQ CX, $0
-	JLE ddone
-	MOVSS (SI), X1
-	MULSS (DX), X1
-	ADDSS X1, X0
-	ADDQ $4, SI
-	ADDQ $4, DX
-	SUBQ $1, CX
-	JMP dscalar
-
-ddone:
-	MOVSS X0, ret+24(FP)
-	VZEROUPPER
-	RET
-
 // func fmaRowFloat32AVX2Asm(dst, b unsafe.Pointer, alpha float32, n int)
 // dst[j] += alpha * b[j]
 TEXT ·fmaRowFloat32AVX2Asm(SB), NOSPLIT, $0-32

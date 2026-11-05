@@ -10,7 +10,6 @@ import (
 
 func addFloat32AVX2Asm(dst, a, b unsafe.Pointer, n int)
 func mulFloat32AVX2Asm(dst, a, b unsafe.Pointer, n int)
-func dotFloat32AVX2Asm(a, b unsafe.Pointer, n int) float32
 func fmaRowFloat32AVX2Asm(dst, b unsafe.Pointer, alpha float32, n int)
 
 func AddFloat32AVX2(dst, a, b []float32) {
