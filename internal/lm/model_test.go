@@ -366,3 +366,101 @@ func BenchmarkTrainOneStep(b *testing.B) {
 		}
 	}
 }
+
+// TestKVCacheMatchesFullForward verifies that the KV-cache prefill+step path
+// produces numerically identical logits to the full forward pass at every
+// generated position. This ensures the O(1) generation path is a correct
+// implementation of the full O(N²) causal attention forward pass.
+func TestKVCacheMatchesFullForward(t *testing.T) {
+	text := "kv cache equivalence check for all tokens"
+	tokenizer, err := TrainTokenizer([]string{text + text}, 256)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Use context=16 so we stay comfortably within the window.
+	model, err := NewModel(Config{Context: 16, Width: 8, Layers: 2, Heads: 2}, tokenizer, 77)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	promptIDs := tokenizer.Encode("kv cache")
+	if len(promptIDs) == 0 {
+		t.Fatal("prompt encoded to zero tokens")
+	}
+
+	backend := model.inferenceBackend()
+	const genSteps = 4
+
+	// ── Full forward reference ─────────────────────────────────────────────
+	// At each step i, run the full forward on promptIDs[0..i] to get the
+	// next-token prediction. This is the ground-truth O(N²) path.
+	refLogits := make([][]float32, len(promptIDs)+genSteps)
+	ids := append([]int(nil), promptIDs...)
+	for i := 0; i < len(promptIDs)+genSteps; i++ {
+		logits := backend.Forward(ids[:i+1])
+		refLogits[i] = append([]float32(nil), logits...)
+		if i >= len(promptIDs)-1 {
+			// Extend with the argmax token to keep the sequence deterministic.
+			best, bestLogit := 0, float32(math.Inf(-1))
+			for id, v := range logits {
+				if v > bestLogit {
+					bestLogit = v
+					best = id
+				}
+			}
+			if i < len(promptIDs)+genSteps-1 {
+				ids = append(ids, best)
+			}
+		}
+	}
+
+	// ── KV-cache path ──────────────────────────────────────────────────────
+	// Prefill all prompt tokens, then step one token at a time, using the
+	// same argmax choices as above to keep sequences aligned.
+	kvCache := backend.NewKVCache()
+	ids2 := append([]int(nil), promptIDs...)
+	for i, id := range promptIDs {
+		kvLogits := backend.ForwardStepKV(id, i, kvCache)
+
+		// Compare logits at every prompt position.
+		ref := refLogits[i]
+		if len(kvLogits) != len(ref) {
+			t.Fatalf("position %d: logit length mismatch %d vs %d", i, len(kvLogits), len(ref))
+		}
+		for j, v := range kvLogits {
+			diff := math.Abs(float64(v - ref[j]))
+			if diff > 1e-4 {
+				t.Fatalf("position %d logit[%d]: KV=%.6f full=%.6f diff=%.6f", i, j, v, ref[j], diff)
+			}
+		}
+	}
+	pos := len(promptIDs)
+	for step := 0; step < genSteps; step++ {
+		refIdx := len(promptIDs) - 1 + step
+		// Use the same argmax token as the reference sequence.
+		best, bestLogit := 0, float32(math.Inf(-1))
+		for id, v := range refLogits[refIdx] {
+			if v > bestLogit {
+				bestLogit = v
+				best = id
+			}
+		}
+		kvLogits := backend.ForwardStepKV(best, pos, kvCache)
+		ids2 = append(ids2, best)
+		pos++
+
+		refIdx2 := len(promptIDs) + step
+		ref := refLogits[refIdx2]
+		if len(kvLogits) != len(ref) {
+			t.Fatalf("gen step %d: logit length mismatch %d vs %d", step, len(kvLogits), len(ref))
+		}
+		for j, v := range kvLogits {
+			diff := math.Abs(float64(v - ref[j]))
+			if diff > 1e-4 {
+				t.Fatalf("gen step %d logit[%d]: KV=%.6f full=%.6f diff=%.6f", step, j, v, ref[j], diff)
+			}
+		}
+	}
+	_ = ids2
+}
+
