@@ -105,7 +105,7 @@ func (m *Model) addParameter(p *parameter) *parameter {
 func NewModel(config Config, tokenizer *Tokenizer, seed int64) (*Model, error) {
 	config.Normalize()
 	if config.Context < 2 || config.Context > 2048 || config.Width < 2 || config.Width > 512 ||
-		tokenizer == nil || len(tokenizer.Tokens) < 256 || len(tokenizer.Tokens) > 4096 {
+		tokenizer == nil || len(tokenizer.Tokens) < MinVocabSize || len(tokenizer.Tokens) > MaxVocabSize {
 		return nil, fmt.Errorf("invalid model config or tokenizer")
 	}
 	if config.Layers < 1 || config.Layers > 16 {

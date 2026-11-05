@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"m3tal-ai/internal/tensor"
+	"m3tal-llm/internal/tensor"
 )
 
 func TestKVCacheLifecycle(t *testing.T) {

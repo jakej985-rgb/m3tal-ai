@@ -5,9 +5,9 @@ import (
 	"math/rand"
 	"testing"
 
-	"m3tal-ai/internal/autograd"
-	"m3tal-ai/internal/gradcheck"
-	"m3tal-ai/internal/tensor"
+	"m3tal-llm/internal/autograd"
+	"m3tal-llm/internal/gradcheck"
+	"m3tal-llm/internal/tensor"
 )
 
 // TestCausalMaskingPreventsLeakage tests that modifying future input tokens at position > t
