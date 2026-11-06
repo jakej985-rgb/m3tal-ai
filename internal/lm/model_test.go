@@ -490,3 +490,32 @@ func TestConfigParameterCountMatchesModel(t *testing.T) {
 		t.Fatalf("stage0-tiny count = %d, want 149376", got)
 	}
 }
+
+func TestEvaluateFastMatchesRoughly(t *testing.T) {
+	// Chunked eval should be in the same ballpark as exact sliding-window
+	// eval on a tiny corpus (semantics differ slightly by design).
+	tok := testChatTokenizer(t)
+	cfg := Config{Context: 32, Width: 32, Layers: 2, Heads: 4}
+	m, err := NewModel(cfg, tok, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	texts := []string{
+		"<|im_start|>user\nWhat is 2+2?<|im_end|>\n<|im_start|>assistant\n4<|im_end|>\n",
+		"<|im_start|>user\nSay hi<|im_end|>\n<|im_start|>assistant\nHi!<|im_end|>\n",
+	}
+	exact, err := m.Evaluate(texts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fast, err := m.EvaluateFast(texts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fast <= 0 {
+		t.Fatalf("fast loss %v", fast)
+	}
+	if diff := fast - exact; diff > 1.0 || diff < -1.0 {
+		t.Fatalf("fast %.4f vs exact %.4f diverge", fast, exact)
+	}
+}

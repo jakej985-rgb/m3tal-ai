@@ -978,6 +978,7 @@ func datasetExport(args []string) error {
 // evalBenchReport is the machine-readable output of `eval-bench`.
 type evalBenchReport struct {
 	Checkpoint  string          `json:"checkpoint"`
+	EvalMode    string          `json:"eval_mode"`
 	Backend     string          `json:"backend"`
 	Corpus      string          `json:"corpus"`
 	EvalLoss    float64         `json:"eval_loss"`
@@ -1015,6 +1016,7 @@ func evalBench(args []string) error {
 	baseline := flags.String("baseline", "", "previous eval-bench JSON report to compare against")
 	maxIncrease := flags.Float64("max-loss-increase", 0.05, "fail if eval loss exceeds baseline by more than this")
 	maxEvalTokens := flags.Int("max-eval-tokens", 65536, "cap on corpus tokens evaluated (0 = all)")
+	evalMode := flags.String("eval-mode", "fast", "evaluation mode: fast (chunked blocks) or exact (sliding window, slow)")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -1048,7 +1050,12 @@ func evalBench(args []string) error {
 		}
 		texts = kept
 	}
-	evalLoss, err := model.Evaluate(texts)
+	var evalLoss float64
+	if *evalMode == "exact" {
+		evalLoss, err = model.Evaluate(texts)
+	} else {
+		evalLoss, err = model.EvaluateFast(texts)
+	}
 	if err != nil {
 		return err
 	}
@@ -1077,6 +1084,7 @@ func evalBench(args []string) error {
 
 	rep := evalBenchReport{
 		Checkpoint:  *checkpoint,
+		EvalMode:    *evalMode,
 		Backend:     kernel.Selected(),
 		Corpus:      *corpusArg,
 		EvalLoss:    evalLoss,

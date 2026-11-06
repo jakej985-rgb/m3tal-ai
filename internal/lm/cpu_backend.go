@@ -2,6 +2,8 @@ package lm
 
 import (
 	"math"
+	"runtime"
+	"sync"
 
 	"m3tal-llm/internal/gpu"
 )
@@ -283,7 +285,81 @@ func applyInverseRoPE(dq, dk []float32, rows, width, headDim, heads int) {
 }
 
 // linear32 applies a dense linear layer (weights + bias) to every row.
+// linearWorkThreshold is the minimum MAC count before linear32 switches
+// to the parallel implementation — below this, goroutine overhead costs
+// more than the parallelism saves (tiny models / KV single-token steps).
+const linearWorkThreshold = 1 << 18 // ~262k MACs
+
 func linear32(input []float32, rows, inputSize, outputSize int, layer inferenceLayer) []float32 {
+	if rows*inputSize*outputSize >= linearWorkThreshold {
+		return linear32Parallel(input, rows, inputSize, outputSize, layer)
+	}
+	output := make([]float32, rows*outputSize)
+	for row := 0; row < rows; row++ {
+		outRow := output[row*outputSize : (row+1)*outputSize]
+		copy(outRow, layer.bias)
+		inRow := input[row*inputSize : (row+1)*inputSize]
+		for k, val := range inRow {
+			if val == 0 {
+				continue
+			}
+			wRow := layer.weights[k*outputSize : (k+1)*outputSize]
+			for col := 0; col < outputSize; col++ {
+				outRow[col] += val * wRow[col]
+			}
+		}
+	}
+	return output
+}
+
+// linear32Parallel splits output columns across worker goroutines. Each
+// worker owns a contiguous column range for every row, so results are
+// identical to the serial path (same order of accumulation per element).
+func linear32Parallel(input []float32, rows, inputSize, outputSize int, layer inferenceLayer) []float32 {
+	output := make([]float32, rows*outputSize)
+	workers := runtime.GOMAXPROCS(0)
+	if workers > 8 {
+		workers = 8
+	}
+	if workers < 2 || outputSize < workers*8 {
+		return linear32Serial(input, rows, inputSize, outputSize, layer)
+	}
+	chunk := (outputSize + workers - 1) / workers
+	var wg sync.WaitGroup
+	for w := 0; w < workers; w++ {
+		c0, c1 := w*chunk, (w+1)*chunk
+		if c1 > outputSize {
+			c1 = outputSize
+		}
+		if c0 >= c1 {
+			break
+		}
+		wg.Add(1)
+		go func(c0, c1 int) {
+			defer wg.Done()
+			for row := 0; row < rows; row++ {
+				outRow := output[row*outputSize : (row+1)*outputSize]
+				for col := c0; col < c1; col++ {
+					outRow[col] = layer.bias[col]
+				}
+				inRow := input[row*inputSize : (row+1)*inputSize]
+				for k, val := range inRow {
+					if val == 0 {
+						continue
+					}
+					wRow := layer.weights[k*outputSize : (k+1)*outputSize]
+					for col := c0; col < c1; col++ {
+						outRow[col] += val * wRow[col]
+					}
+				}
+			}
+		}(c0, c1)
+	}
+	wg.Wait()
+	return output
+}
+
+func linear32Serial(input []float32, rows, inputSize, outputSize int, layer inferenceLayer) []float32 {
 	output := make([]float32, rows*outputSize)
 	for row := 0; row < rows; row++ {
 		outRow := output[row*outputSize : (row+1)*outputSize]

@@ -628,6 +628,50 @@ func (m *Model) TrainInstructions(examples []InstructionExample, epochs, stepsPe
 	return losses, nil
 }
 
+// EvaluateFast returns mean next-token cross-entropy like Evaluate but
+// scores non-overlapping context-sized blocks in a single forward pass
+// per block (~context× fewer forwards). Semantics differ slightly from
+// Evaluate: tokens early in each block see only their in-block prefix as
+// context rather than a full sliding window. Use for large held-out
+// corpora; use Evaluate for exact sliding-window scoring.
+func (m *Model) EvaluateFast(texts []string) (float64, error) {
+	var ids []int
+	for _, text := range texts {
+		ids = append(ids, m.Tokenizer.Encode(text)...)
+		ids = append(ids, m.Tokenizer.Encode("\n")...)
+	}
+	if len(ids) < 2 {
+		return 0, fmt.Errorf("evaluation corpus must encode to at least two tokens")
+	}
+	context := m.Config.Context
+	if context < 2 {
+		context = 2
+	}
+	var total float64
+	var count int64
+	vocab := len(m.Tokenizer.Tokens)
+	for start := 0; start+1 < len(ids); start += context - 1 {
+		end := start + context
+		if end > len(ids) {
+			end = len(ids)
+		}
+		w := ids[start:end]
+		if len(w) < 2 {
+			break
+		}
+		cache := m.forward(w)
+		rows := len(cache.ids)
+		for i := 0; i+1 < rows && i+1 < len(w); i++ {
+			total += tokenLoss32(cache.logits[i*vocab:(i+1)*vocab], w[i+1])
+			count++
+		}
+	}
+	if count == 0 {
+		return 0, fmt.Errorf("no scorable tokens in evaluation corpus")
+	}
+	return total / float64(count), nil
+}
+
 // Evaluate returns mean next-token cross-entropy over a held-out corpus.
 func (m *Model) Evaluate(texts []string) (float64, error) {
 	var ids []int
