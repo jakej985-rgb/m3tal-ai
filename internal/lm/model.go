@@ -436,37 +436,41 @@ func (m *Model) backward(cache forwardCache, targets []int, mask []bool) {
 		gradValues := make([]float32, rows*width)
 
 		gradAttention := make([]float32, heads*rows*rows)
-		for h := 0; h < heads; h++ {
-			headOffset := h * headDim
-			headMatrixOffset := h * rows * rows
-			for i := 0; i < rows; i++ {
-				for d := 0; d < headDim; d++ {
-					for j := 0; j <= i; j++ {
-						gradAttention[headMatrixOffset+i*rows+j] += gradAttended[i*width+headOffset+d] * bc.v[j*width+headOffset+d]
-						gradValues[j*width+headOffset+d] += bc.attention[headMatrixOffset+i*rows+j] * gradAttended[i*width+headOffset+d]
-					}
-				}
-			}
-		}
-
-		for h := 0; h < heads; h++ {
-			headOffset := h * headDim
-			headMatrixOffset := h * rows * rows
-			for i := 0; i < rows; i++ {
-				var weightedGrad float32
-				for j := 0; j <= i; j++ {
-					weightedGrad += bc.attention[headMatrixOffset+i*rows+j] * gradAttention[headMatrixOffset+i*rows+j]
-				}
-				for j := 0; j <= i; j++ {
-					gradScore := bc.attention[headMatrixOffset+i*rows+j] * (gradAttention[headMatrixOffset+i*rows+j] - weightedGrad)
+		parallelFor(heads, rows*rows*headDim, func(h0, h1 int) {
+			for h := h0; h < h1; h++ {
+				headOffset := h * headDim
+				headMatrixOffset := h * rows * rows
+				for i := 0; i < rows; i++ {
 					for d := 0; d < headDim; d++ {
-						// bc.q and bc.k are the post-RoPE vectors used in the forward pass.
-						gradQueryRope[i*width+headOffset+d] += gradScore * bc.k[j*width+headOffset+d] * scale
-						gradKeysRope[j*width+headOffset+d] += gradScore * bc.q[i*width+headOffset+d] * scale
+						for j := 0; j <= i; j++ {
+							gradAttention[headMatrixOffset+i*rows+j] += gradAttended[i*width+headOffset+d] * bc.v[j*width+headOffset+d]
+							gradValues[j*width+headOffset+d] += bc.attention[headMatrixOffset+i*rows+j] * gradAttended[i*width+headOffset+d]
+						}
 					}
 				}
 			}
-		}
+		})
+
+		parallelFor(heads, rows*rows*headDim, func(h0, h1 int) {
+			for h := h0; h < h1; h++ {
+				headOffset := h * headDim
+				headMatrixOffset := h * rows * rows
+				for i := 0; i < rows; i++ {
+					var weightedGrad float32
+					for j := 0; j <= i; j++ {
+						weightedGrad += bc.attention[headMatrixOffset+i*rows+j] * gradAttention[headMatrixOffset+i*rows+j]
+					}
+					for j := 0; j <= i; j++ {
+						gradScore := bc.attention[headMatrixOffset+i*rows+j] * (gradAttention[headMatrixOffset+i*rows+j] - weightedGrad)
+						for d := 0; d < headDim; d++ {
+							// bc.q and bc.k are the post-RoPE vectors used in the forward pass.
+							gradQueryRope[i*width+headOffset+d] += gradScore * bc.k[j*width+headOffset+d] * scale
+							gradKeysRope[j*width+headOffset+d] += gradScore * bc.q[i*width+headOffset+d] * scale
+						}
+					}
+				}
+			}
+		})
 
 		// ── 3i. RoPE backward: inverse rotation on Q and K gradients ──
 		applyInverseRoPE(gradQueryRope, gradKeysRope, rows, width, headDim, heads)

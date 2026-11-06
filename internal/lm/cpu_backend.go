@@ -213,27 +213,33 @@ func rmsNormBackward(gradOut, x, rmsVals, gamma []float32, rows, width int, gamm
 
 // applyRoPE rotates query and key vectors in-place using Rotary Position Embeddings.
 func applyRoPE(q, k []float32, rows, width, headDim, heads int) {
-	for row := 0; row < rows; row++ {
-		pos := float64(row)
-		for h := 0; h < heads; h++ {
-			headOff := h * headDim
-			for d := 0; d < headDim/2; d++ {
-				theta := math.Pow(10000, -2*float64(d)/float64(headDim))
-				cosVal := float32(math.Cos(pos * theta))
-				sinVal := float32(math.Sin(pos * theta))
-				qi := row*width + headOff + 2*d
-				qj := qi + 1
-				ki := row*width + headOff + 2*d
-				kj := ki + 1
-				q0, q1 := q[qi], q[qj]
-				q[qi] = q0*cosVal - q1*sinVal
-				q[qj] = q0*sinVal + q1*cosVal
-				k0, k1 := k[ki], k[kj]
-				k[ki] = k0*cosVal - k1*sinVal
-				k[kj] = k0*sinVal + k1*cosVal
+	thetas := make([]float64, headDim/2)
+	for d := 0; d < headDim/2; d++ {
+		thetas[d] = math.Pow(10000, -2*float64(d)/float64(headDim))
+	}
+	parallelFor(rows, headDim*heads, func(r0, r1 int) {
+		for row := r0; row < r1; row++ {
+			pos := float64(row)
+			for h := 0; h < heads; h++ {
+				headOff := h * headDim
+				for d := 0; d < headDim/2; d++ {
+					theta := thetas[d]
+					cosVal := float32(math.Cos(pos * theta))
+					sinVal := float32(math.Sin(pos * theta))
+					qi := row*width + headOff + 2*d
+					qj := qi + 1
+					ki := row*width + headOff + 2*d
+					kj := ki + 1
+					q0, q1 := q[qi], q[qj]
+					q[qi] = q0*cosVal - q1*sinVal
+					q[qj] = q0*sinVal + q1*cosVal
+					k0, k1 := k[ki], k[kj]
+					k[ki] = k0*cosVal - k1*sinVal
+					k[kj] = k0*sinVal + k1*cosVal
+				}
 			}
 		}
-	}
+	})
 }
 
 // applyRoPESingle rotates a single token's Q and K vectors at a specific sequence position.
@@ -261,30 +267,70 @@ func applyRoPESingle(q, k []float32, pos, width, headDim, heads int) {
 
 // applyInverseRoPE applies the transpose (inverse) rotation R^T for the backward pass.
 func applyInverseRoPE(dq, dk []float32, rows, width, headDim, heads int) {
-	for row := 0; row < rows; row++ {
-		pos := float64(row)
-		for h := 0; h < heads; h++ {
-			headOff := h * headDim
-			for d := 0; d < headDim/2; d++ {
-				theta := math.Pow(10000, -2*float64(d)/float64(headDim))
-				cosVal := float32(math.Cos(pos * theta))
-				sinVal := float32(math.Sin(pos * theta))
-				qi := row*width + headOff + 2*d
-				qj := qi + 1
-				ki := row*width + headOff + 2*d
-				kj := ki + 1
-				dq0, dq1 := dq[qi], dq[qj]
-				dq[qi] = dq0*cosVal + dq1*sinVal
-				dq[qj] = -dq0*sinVal + dq1*cosVal
-				dk0, dk1 := dk[ki], dk[kj]
-				dk[ki] = dk0*cosVal + dk1*sinVal
-				dk[kj] = -dk0*sinVal + dk1*cosVal
+	thetas := make([]float64, headDim/2)
+	for d := 0; d < headDim/2; d++ {
+		thetas[d] = math.Pow(10000, -2*float64(d)/float64(headDim))
+	}
+	parallelFor(rows, headDim*heads, func(r0, r1 int) {
+		for row := r0; row < r1; row++ {
+			pos := float64(row)
+			for h := 0; h < heads; h++ {
+				headOff := h * headDim
+				for d := 0; d < headDim/2; d++ {
+					theta := thetas[d]
+					cosVal := float32(math.Cos(pos * theta))
+					sinVal := float32(math.Sin(pos * theta))
+					qi := row*width + headOff + 2*d
+					qj := qi + 1
+					ki := row*width + headOff + 2*d
+					kj := ki + 1
+					dq0, dq1 := dq[qi], dq[qj]
+					dq[qi] = dq0*cosVal + dq1*sinVal
+					dq[qj] = -dq0*sinVal + dq1*cosVal
+					dk0, dk1 := dk[ki], dk[kj]
+					dk[ki] = dk0*cosVal + dk1*sinVal
+					dk[kj] = -dk0*sinVal + dk1*cosVal
+				}
 			}
 		}
-	}
+	})
 }
 
 // linear32 applies a dense linear layer (weights + bias) to every row.
+// parallelFor splits range [0,n) across up to 8 workers when the
+// estimated work (n*workPerItem) exceeds linearWorkThreshold; otherwise
+// it runs fn(0,n) inline to avoid goroutine overhead on tiny workloads.
+func parallelFor(n, workPerItem int, fn func(lo, hi int)) {
+	if n <= 0 {
+		return
+	}
+	workers := runtime.GOMAXPROCS(0)
+	if workers > 8 {
+		workers = 8
+	}
+	if int64(n)*int64(workPerItem) < linearWorkThreshold || workers < 2 {
+		fn(0, n)
+		return
+	}
+	chunk := (n + workers - 1) / workers
+	var wg sync.WaitGroup
+	for w := 0; w < workers; w++ {
+		lo, hi := w*chunk, (w+1)*chunk
+		if hi > n {
+			hi = n
+		}
+		if lo >= hi {
+			break
+		}
+		wg.Add(1)
+		go func(lo, hi int) {
+			defer wg.Done()
+			fn(lo, hi)
+		}(lo, hi)
+	}
+	wg.Wait()
+}
+
 // linearWorkThreshold is the minimum MAC count before linear32 switches
 // to the parallel implementation — below this, goroutine overhead costs
 // more than the parallelism saves (tiny models / KV single-token steps).
@@ -422,48 +468,52 @@ func forwardFloat32(config Config, vocab int, weights inferenceWeights, tokenIDs
 
 		// ── Causal multi-head attention ────────────────────────────────
 		attention := make([]float32, heads*rows*rows)
-		for h := 0; h < heads; h++ {
-			headOffset := h * headDim
-			headMatrixOffset := h * rows * rows
-			for i := 0; i < rows; i++ {
-				maximum := float32(math.Inf(-1))
-				for j := 0; j <= i; j++ {
-					var score float32
-					for d := 0; d < headDim; d++ {
-						score += q[i*width+headOffset+d] * k[j*width+headOffset+d]
+		parallelFor(heads, rows*rows*headDim, func(h0, h1 int) {
+			for h := h0; h < h1; h++ {
+				headOffset := h * headDim
+				headMatrixOffset := h * rows * rows
+				for i := 0; i < rows; i++ {
+					maximum := float32(math.Inf(-1))
+					for j := 0; j <= i; j++ {
+						var score float32
+						for d := 0; d < headDim; d++ {
+							score += q[i*width+headOffset+d] * k[j*width+headOffset+d]
+						}
+						score *= scale
+						attention[headMatrixOffset+i*rows+j] = score
+						if score > maximum {
+							maximum = score
+						}
 					}
-					score *= scale
-					attention[headMatrixOffset+i*rows+j] = score
-					if score > maximum {
-						maximum = score
+					var normalizer float32
+					for j := 0; j <= i; j++ {
+						val := float32(math.Exp(float64(attention[headMatrixOffset+i*rows+j] - maximum)))
+						attention[headMatrixOffset+i*rows+j] = val
+						normalizer += val
 					}
-				}
-				var normalizer float32
-				for j := 0; j <= i; j++ {
-					val := float32(math.Exp(float64(attention[headMatrixOffset+i*rows+j] - maximum)))
-					attention[headMatrixOffset+i*rows+j] = val
-					normalizer += val
-				}
-				for j := 0; j <= i; j++ {
-					attention[headMatrixOffset+i*rows+j] /= normalizer
+					for j := 0; j <= i; j++ {
+						attention[headMatrixOffset+i*rows+j] /= normalizer
+					}
 				}
 			}
-		}
+		})
 
 		attended := make([]float32, rows*width)
-		for h := 0; h < heads; h++ {
-			headOffset := h * headDim
-			headMatrixOffset := h * rows * rows
-			for i := 0; i < rows; i++ {
-				for d := 0; d < headDim; d++ {
-					var sum float32
-					for j := 0; j <= i; j++ {
-						sum += attention[headMatrixOffset+i*rows+j] * v[j*width+headOffset+d]
+		parallelFor(heads, rows*rows*headDim, func(h0, h1 int) {
+			for h := h0; h < h1; h++ {
+				headOffset := h * headDim
+				headMatrixOffset := h * rows * rows
+				for i := 0; i < rows; i++ {
+					for d := 0; d < headDim; d++ {
+						var sum float32
+						for j := 0; j <= i; j++ {
+							sum += attention[headMatrixOffset+i*rows+j] * v[j*width+headOffset+d]
+						}
+						attended[i*width+headOffset+d] = sum
 					}
-					attended[i*width+headOffset+d] = sum
 				}
 			}
-		}
+		})
 
 		// Attention output projection + first residual connection.
 		attnProjection := linear32(attended, rows, width, width, block.attnOut)
