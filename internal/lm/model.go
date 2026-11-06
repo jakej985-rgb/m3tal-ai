@@ -845,3 +845,7 @@ func LoadCheckpoint(path string) (*Model, error) {
 	}
 	return model, nil
 }
+
+// Step returns the optimizer step count stored in this model (0 for
+// freshly initialized models). Used by model cards and packaging.
+func (m *Model) Step() int64 { return m.step }

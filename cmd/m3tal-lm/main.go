@@ -1,20 +1,25 @@
 package main
 
 import (
+	"archive/tar"
 	"bufio"
+	"compress/gzip"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"math"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
 	"m3tal-llm/internal/lm"
+	"m3tal-llm/internal/server"
 	"m3tal-llm/internal/tensor/kernel"
 )
 
@@ -450,8 +455,14 @@ func run(args []string) error {
 		return chatData(args[1:])
 	case "chat-eval":
 		return chatEval(args[1:])
+	case "serve":
+		return serveLLM(args[1:])
+	case "model-card":
+		return modelCard(args[1:])
+	case "package":
+		return packageModel(args[1:])
 	default:
-		return fmt.Errorf("unknown command %q; use train, eval, generate, instructions, dataset, chatdata, chat-eval, backends, or model-info", args[0])
+		return fmt.Errorf("unknown command %q; use train, eval, generate, instructions, dataset, chatdata, chat-eval, serve, model-card, package, backends, or model-info", args[0])
 	}
 }
 
@@ -1270,6 +1281,224 @@ func chatEval(args []string) error {
 	}
 	if regressed {
 		return fmt.Errorf("assistant loss regressed beyond threshold vs baseline")
+	}
+	return nil
+}
+
+// serveLLM runs the HTTP inference server (Stage 4 M3TAL integration).
+func serveLLM(args []string) error {
+	flags := flag.NewFlagSet("serve", flag.ContinueOnError)
+	checkpoint := flags.String("checkpoint", "", "model checkpoint path (required)")
+	addr := flags.String("addr", "127.0.0.1:8080", "listen address")
+	maxPrompt := flags.Int("max-prompt-tokens", 0, "max encoded prompt tokens (0 = server default)")
+	maxOutput := flags.Int("max-output-tokens", 0, "max generated tokens per request (0 = server default)")
+	maxBodyMB := flags.Int64("max-body-mb", 0, "max request body MiB (0 = server default)")
+	timeoutSec := flags.Int("timeout", 0, "per-request timeout seconds (0 = server default)")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if strings.TrimSpace(*checkpoint) == "" {
+		return fmt.Errorf("--checkpoint is required")
+	}
+	model, err := lm.LoadCheckpoint(*checkpoint)
+	if err != nil {
+		return err
+	}
+	policy := server.Policy{}
+	if *maxPrompt > 0 {
+		policy.MaxPromptTokens = *maxPrompt
+	}
+	if *maxOutput > 0 {
+		policy.MaxOutputTokens = *maxOutput
+	}
+	if *maxBodyMB > 0 {
+		policy.MaxBodyBytes = *maxBodyMB << 20
+	}
+	if *timeoutSec > 0 {
+		policy.RequestTimeout = time.Duration(*timeoutSec) * time.Second
+	}
+	srv := server.New(model, policy)
+	httpSrv := &http.Server{
+		Addr:              *addr,
+		Handler:           srv.Handler(),
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+	fmt.Printf("m3tal-lm serve: %s (params %d, prompt<=%d tok, output<=%d tok)\n",
+		*addr, model.ParameterCount(), srv.Policy().MaxPromptTokens, srv.Policy().MaxOutputTokens)
+	return httpSrv.ListenAndServe()
+}
+
+// modelCard implements `model-card` — generates a Markdown model card
+// from a checkpoint (Stage 4 safety/model documentation).
+func modelCard(args []string) error {
+	flags := flag.NewFlagSet("model-card", flag.ContinueOnError)
+	checkpoint := flags.String("checkpoint", "", "model checkpoint path (required)")
+	out := flags.String("out", "", "output Markdown path (required)")
+	name := flags.String("name", "", "model name for the card (default: checkpoint base name)")
+	dataNotes := flags.String("data-notes", "", "free-text training-data provenance note")
+	chatTemplate := flags.Bool("chat", false, "mark as chat model (m3tal.chatml.v1)")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if strings.TrimSpace(*checkpoint) == "" || strings.TrimSpace(*out) == "" {
+		return fmt.Errorf("--checkpoint and --out are required")
+	}
+	model, err := lm.LoadCheckpoint(*checkpoint)
+	if err != nil {
+		return err
+	}
+	modelName := *name
+	if modelName == "" {
+		modelName = strings.TrimSuffix(filepath.Base(*checkpoint), filepath.Ext(*checkpoint))
+	}
+	provenance := *dataNotes
+	if provenance == "" {
+		provenance = "See docs/DATA.md for dataset provenance requirements. " +
+			"This checkpoint's training corpus provenance must be recorded by the operator."
+	}
+	template := ""
+	if *chatTemplate {
+		template = lm.ChatTemplateVersion
+	}
+	card := lm.RenderModelCard(lm.ModelCardData{
+		Name:            modelName,
+		CheckpointPath:  *checkpoint,
+		Config:          model.Config,
+		Parameters:      model.ParameterCount(),
+		VocabSize:       len(model.Tokenizer.Tokens),
+		TokenizerHash:   lm.TokenizerFingerprint(model.Tokenizer),
+		Step:            model.Step(),
+		TemplateVersion: template,
+		DataProvenance:  provenance,
+		Limitations: []string{
+			"Small model trained from scratch; output quality is limited and may be incoherent, biased, or incorrect.",
+			"May reproduce memorized training text; verify outputs before use.",
+			"No built-in content moderation — apply safety policy at the serving layer (see docs/SERVE.md).",
+			"CPU inference is slow for large checkpoints; check docs/PACKAGING.md hardware requirements.",
+		},
+	})
+	if err := os.MkdirAll(filepath.Dir(*out), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(*out, []byte(card), 0o644)
+}
+
+// packageModel implements `package` — bundles a checkpoint with its
+// model card and a manifest + SHA256 checksum (Stage 4 packaging).
+func packageModel(args []string) error {
+	flags := flag.NewFlagSet("package", flag.ContinueOnError)
+	checkpoint := flags.String("checkpoint", "", "model checkpoint path (required)")
+	outDir := flags.String("out-dir", "dist", "output directory")
+	name := flags.String("name", "", "package name (default: checkpoint base name)")
+	dataNotes := flags.String("data-notes", "", "provenance note embedded in the model card")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if strings.TrimSpace(*checkpoint) == "" {
+		return fmt.Errorf("--checkpoint is required")
+	}
+	model, err := lm.LoadCheckpoint(*checkpoint)
+	if err != nil {
+		return err
+	}
+	pkgName := *name
+	if pkgName == "" {
+		pkgName = strings.TrimSuffix(filepath.Base(*checkpoint), filepath.Ext(*checkpoint))
+	}
+	if err := os.MkdirAll(*outDir, 0o755); err != nil {
+		return err
+	}
+
+	// Model card alongside the package.
+	cardPath := filepath.Join(*outDir, pkgName+"-MODEL-CARD.md")
+	cardArgs := []string{"--checkpoint", *checkpoint, "--out", cardPath, "--name", pkgName}
+	if *dataNotes != "" {
+		cardArgs = append(cardArgs, "--data-notes", *dataNotes)
+	}
+	if err := modelCard(cardArgs); err != nil {
+		return fmt.Errorf("model card: %w", err)
+	}
+
+	// Manifest with artifact hash.
+	ckptData, err := os.ReadFile(*checkpoint)
+	if err != nil {
+		return err
+	}
+	ckptSum := sha256.Sum256(ckptData)
+	manifest := map[string]any{
+		"name":              pkgName,
+		"format_version":    2,
+		"config":            model.Config,
+		"parameters":        model.ParameterCount(),
+		"vocab_size":        len(model.Tokenizer.Tokens),
+		"tokenizer_hash":    lm.TokenizerFingerprint(model.Tokenizer),
+		"step":              model.Step(),
+		"checkpoint_sha256": fmt.Sprintf("%x", ckptSum),
+		"files": []string{
+			filepath.Base(*checkpoint),
+			pkgName + "-MODEL-CARD.md",
+			pkgName + "-manifest.json",
+		},
+	}
+	manifestData, _ := json.MarshalIndent(manifest, "", "  ")
+	manifestPath := filepath.Join(*outDir, pkgName+"-manifest.json")
+	if err := os.WriteFile(manifestPath, manifestData, 0o644); err != nil {
+		return err
+	}
+
+	// tar.gz bundle.
+	archivePath := filepath.Join(*outDir, pkgName+".tar.gz")
+	if err := writeTarGz(archivePath, map[string]string{
+		filepath.Base(*checkpoint): string(ckptData),
+		pkgName + "-MODEL-CARD.md": mustRead(cardPath),
+		pkgName + "-manifest.json": string(manifestData),
+	}); err != nil {
+		return err
+	}
+	// Checksum file for the archive.
+	archiveData, err := os.ReadFile(archivePath)
+	if err != nil {
+		return err
+	}
+	sum := sha256.Sum256(archiveData)
+	sumPath := archivePath + ".sha256"
+	if err := os.WriteFile(sumPath, []byte(fmt.Sprintf("%x  %s\n", sum, filepath.Base(archivePath))), 0o644); err != nil {
+		return err
+	}
+	fmt.Printf("packaged %s → %s (+ .sha256), %d bytes checkpoint, %d params\n",
+		pkgName, archivePath, len(ckptData), model.ParameterCount())
+	return nil
+}
+
+func mustRead(path string) string {
+	data, _ := os.ReadFile(path)
+	return string(data)
+}
+
+func writeTarGz(path string, files map[string]string) error {
+	out, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	gz := gzip.NewWriter(out)
+	defer gz.Close()
+	tw := tar.NewWriter(gz)
+	defer tw.Close()
+	names := make([]string, 0, len(files))
+	for n := range files {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		data := files[name]
+		hdr := &tar.Header{Name: name, Mode: 0o644, Size: int64(len(data))}
+		if err := tw.WriteHeader(hdr); err != nil {
+			return err
+		}
+		if _, err := tw.Write([]byte(data)); err != nil {
+			return err
+		}
 	}
 	return nil
 }
