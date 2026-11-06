@@ -19,15 +19,24 @@ code they describe is maintained in `m3tal-plugins/m3tal-ai`.
 
 - **Optional model, never required.** m3tal-ai works fully without a
   language model: deterministic routing handles clear phrases, and a
-  small trained classifier plus retrieval cover the rest. A model is
-  loaded only when configured (`--model` / `M3TAL_MODEL_PATH`, or the
-  `llmclient.Generator` adapter pointing at `m3tal-lm serve`).
-- **Two consumption paths.** (1) In-process: m3tal-ai can load a
-  checkpoint produced here directly. (2) Over HTTP: `m3tal-lm serve`
-  exposes `/v1/generate` and `/v1/chat`; `internal/llmclient`'s
-  `Generator` adapter matches the assistant's `Generator` interface so
-  the plugin can route requests to a local server without this repo
-  importing the plugin (see `docs/SERVE.md`).
+  small trained classifier plus retrieval cover the rest.
+- **Current state: no shipped wiring.** As of this writing, m3tal-ai's
+  `cmd/m3tal-ai` exposes no `--model` flag or `M3TAL_MODEL_PATH` env
+  var, and nothing outside its tests calls `Assistant.SetLanguageModel`.
+  There is no in-process checkpoint loader — m3tal-ai does not depend on
+  this repo and cannot parse its checkpoint format.
+- **The intended path is HTTP.** `m3tal-lm serve` exposes `/v1/generate`
+  and `/v1/chat`; `internal/llmclient`'s `Generator` adapter matches the
+  assistant's `Generator` interface signature exactly, so wiring is a
+  few lines in m3tal-ai (see `docs/SERVE.md`):
+
+  ```go
+  c := llmclient.New("http://127.0.0.1:8080")
+  assistant.SetLanguageModel(llmclient.NewGenerator(c))
+  ```
+
+  Until that glue lands in m3tal-ai, the model is consumed only by this
+  repo's own CLI/server and by anything else that speaks the HTTP API.
 - **Model output is never auto-trusted.** Assistant plans must parse
   into the fixed tool schema; invalid output runs no tools. Every
   mutating plan step is checked against M3TAL Core's **live** allowlist
