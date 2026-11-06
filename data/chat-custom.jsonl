@@ -1,0 +1,40 @@
+# Self-owned custom chat examples — starter templates for m3tal-llm SFT.
+# Fill in / rewrite freely; this file is licensed self-owned.
+# Format: {"messages":[...],"category":"..."} — validate with:
+#   ./m3tal-lm chatdata validate data/chat-custom.jsonl
+# Split for SFT with:
+#   ./m3tal-lm chatdata split --in data/chat-custom.jsonl --out-dir /tmp/custom-split
+
+{"messages":[{"role":"user","content":"What is M3TAL?"},{"role":"assistant","content":"M3TAL is a local-first infrastructure management suite. Its core engine exposes a tool API for stacks, containers, services, and logs, and the m3tal-ai assistant routes requests to those tools deterministically."}],"category":"ops-qa"}
+{"messages":[{"role":"user","content":"How do I check the health of my M3TAL deployment?"},{"role":"assistant","content":"Use the health tool through the assistant or Core API to get component status. For a quick check, ask: 'check system health' and the planner will route to the health tool."}],"category":"ops-qa"}
+{"messages":[{"role":"user","content":"How do I restart a container named web?"},{"role":"assistant","content":"Ask the assistant to restart the container 'web', or call the restart_container tool with target 'web'. Confirm the action when prompted."}],"category":"ops-qa"}
+{"messages":[{"role":"user","content":"What stacks are currently running?"},{"role":"assistant","content":"The containers tool lists running stacks and containers. Ask 'list containers' or 'show stacks' and the assistant will query Core for live state."}],"category":"ops-qa"}
+{"messages":[{"role":"user","content":"Where are the M3TAL logs?"},{"role":"assistant","content":"Component logs are available through the logs tool. Ask 'show logs for <component>' and the assistant fetches them from Core."}],"category":"ops-qa"}
+{"messages":[{"role":"system","content":"You are a concise assistant. Answer in one or two sentences."},{"role":"user","content":"What is Docker?"},{"role":"assistant","content":"Docker is a platform for building, shipping, and running applications in lightweight containers."}],"category":"general-qa"}
+{"messages":[{"role":"system","content":"You are a concise assistant. Answer in one or two sentences."},{"role":"user","content":"What is a GPU?"},{"role":"assistant","content":"A GPU is a processor specialized for parallel math, originally for graphics, now widely used for machine learning and rendering."}],"category":"general-qa"}
+{"messages":[{"role":"system","content":"You are a concise assistant. Answer in one or two sentences."},{"role":"user","content":"What is version control?"},{"role":"assistant","content":"Version control tracks changes to files over time so you can review, revert, and collaborate. Git is the most common system."}],"category":"general-qa"}
+{"messages":[{"role":"user","content":"What is 15 * 4?"},{"role":"assistant","content":"60"}],"category":"math"}
+{"messages":[{"role":"user","content":"What is 100 - 37?"},{"role":"assistant","content":"63"}],"category":"math"}
+{"messages":[{"role":"user","content":"What is 9 * 8?"},{"role":"assistant","content":"72"}],"category":"math"}
+{"messages":[{"role":"user","content":"What is 144 / 12?"},{"role":"assistant","content":"12"}],"category":"math"}
+{"messages":[{"role":"user","content":"Say hello in French."},{"role":"assistant","content":"Bonjour!"}],"category":"translation"}
+{"messages":[{"role":"user","content":"How do you say 'thank you' in Spanish?"},{"role":"assistant","content":"'Gracias'."}],"category":"translation"}
+{"messages":[{"role":"user","content":"Translate 'good morning' to German."},{"role":"assistant","content":"'Guten Morgen'."}],"category":"translation"}
+{"messages":[{"role":"user","content":"My name is Sam. What is my name?"},{"role":"assistant","content":"Your name is Sam."}],"category":"multi-turn"}
+{"messages":[{"role":"user","content":"I like tea."},{"role":"assistant","content":"Noted — you like tea."},{"role":"user","content":"What do I like?"},{"role":"assistant","content":"You like tea."}],"category":"multi-turn"}
+{"messages":[{"role":"user","content":"Remember: the deploy key is blue."},{"role":"assistant","content":"Got it — the deploy key is blue."},{"role":"user","content":"What is the deploy key?"},{"role":"assistant","content":"The deploy key is blue."}],"category":"multi-turn"}
+{"messages":[{"role":"user","content":"Give me a one-word answer: what color is a banana?"},{"role":"assistant","content":"Yellow"}],"category":"format"}
+{"messages":[{"role":"system","content":"Always answer with exactly one word."},{"role":"user","content":"Is the sky blue?"},{"role":"assistant","content":"Yes"}],"category":"format"}
+{"messages":[{"role":"user","content":"List three colors."},{"role":"assistant","content":"Red, green, and blue."}],"category":"format"}
+{"messages":[{"role":"user","content":"What is a container in computing?"},{"role":"assistant","content":"A container packages an application with its dependencies so it runs consistently across environments, isolated from the host OS."}],"category":"tech-explain"}
+{"messages":[{"role":"user","content":"Explain what a CPU is in one sentence."},{"role":"assistant","content":"A CPU is the main processor that executes the instructions a computer runs."}],"category":"tech-explain"}
+{"messages":[{"role":"user","content":"What does SSH stand for?"},{"role":"assistant","content":"Secure Shell — a protocol for encrypted remote access to machines."}],"category":"tech-explain"}
+{"messages":[{"role":"user","content":"What is a REST API?"},{"role":"assistant","content":"A REST API is an HTTP-based interface where clients request resources using standard methods like GET and POST."}],"category":"tech-explain"}
+{"messages":[{"role":"user","content":"How do I create a new file called notes.txt?"},{"role":"assistant","content":"Run `touch notes.txt` in your shell, or create it in your editor and save."}],"category":"howto"}
+{"messages":[{"role":"user","content":"How do I see what processes are running?"},{"role":"assistant","content":"Run `ps aux` on Linux/macOS or `tasklist` on Windows."}],"category":"howto"}
+{"messages":[{"role":"user","content":"How do I check disk space?"},{"role":"assistant","content":"Run `df -h` on Linux/macOS to see filesystem usage in human-readable form."}],"category":"howto"}
+{"messages":[{"role":"user","content":"What is the capital of Japan?"},{"role":"assistant","content":"Tokyo."}],"category":"general-qa"}
+{"messages":[{"role":"user","content":"What is the largest planet?"},{"role":"assistant","content":"Jupiter."}],"category":"general-qa"}
+{"messages":[{"role":"user","content":"How many continents are there?"},{"role":"assistant","content":"Seven."}],"category":"general-qa"}
+{"messages":[{"role":"user","content":"What is 2 to the power of 10?"},{"role":"assistant","content":"1024"}],"category":"math"}
+{"messages":[{"role":"user","content":"What is 15% of 200?"},{"role":"assistant","content":"30"}],"category":"math"}

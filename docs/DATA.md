@@ -89,3 +89,16 @@ manifest ID, per-source license/review/URL/version/filters/dedup/SHA-256,
 and ingest stats (documents in/kept/duplicate, train/val token counts).
 `dataset annotate` backfills manifests for datasets built before this
 pipeline existed (used for `data/tinystories-ds`).
+
+## Custom self-owned chat data
+
+`data/chat-custom.jsonl` is a starter set of self-owned chat examples
+(ops Q&A, general QA, math, translation, multi-turn, formatting,
+tech explanations, how-tos) for SFT experiments. It is licensed
+self-owned — edit, extend, or replace freely. Validate and split with:
+
+```sh
+./m3tal-lm chatdata validate data/chat-custom.jsonl
+./m3tal-lm chatdata split --in data/chat-custom.jsonl --out-dir /tmp/custom-split
+./m3tal-lm train --base-model CKPT --sft /tmp/custom-split/train.jsonl --checkpoint out.json
+```
