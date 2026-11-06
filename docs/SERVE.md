@@ -62,14 +62,15 @@ weights.
 ## Go client
 
 `internal/llmclient` wraps the HTTP API and includes a `Generator`
-adapter matching the `m3tal-ai` assistant `Generator` interface
-(`Generate(prompt, maxTokens, temperature, seed)`), so plugins can route
-requests to a local server:
+adapter whose signature matches the `m3tal-ai` assistant `Generator`
+interface (`Generate(prompt, maxTokens, temperature, seed)`) — the
+assistant lives in `m3tal-plugins/m3tal-ai` — so plugins can route
+requests to a local server without this repo depending on it:
 
 ```go
 c := llmclient.New("http://127.0.0.1:8080")
 gen := llmclient.NewGenerator(c)
-assistant.SetLanguageModel(gen) // m3tal-ai Generator interface
+// In m3tal-plugins/m3tal-ai: assistant.SetLanguageModel(gen)
 ```
 
 `Client.ChatStream` supports SSE consumption; an emit error cancels the

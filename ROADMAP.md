@@ -1,5 +1,11 @@
 # M3TAL AI roadmap
 
+> This roadmap covers the M3TAL assistant, which now lives in the M3TAL
+> Plugins repository at `m3tal-plugins/m3tal-ai` (module
+> `m3tal-plugin-ai`). It is kept here as the product-level plan for the
+> assistant; this repo (`m3tal-llm`) remains the research/training/serving
+> side that supplies the optional model (see `docs/ECOSYSTEM_INTEGRATION.md`).
+
 This roadmap builds from the current Go prototype: deterministic intent
 routing, local documentation search, read-only M3TAL Core queries, confirmed
 Core mutations, and an optional experimental from-scratch language model.

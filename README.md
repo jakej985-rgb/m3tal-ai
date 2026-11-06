@@ -6,6 +6,13 @@ language model. The M3TAL local assistant that used to live here has moved to
 the M3TAL Plugins repository at `m3tal-plugins/m3tal-ai` (module
 `m3tal-plugin-ai`).
 
+**What this repo is / is not:** this is the research, training, and serving
+side of the M3TAL local-AI experiments — models, datasets, evals, and an
+HTTP inference API. It is *not* the assistant, a plugin host, or an action
+executor: the assistant lives in `m3tal-plugins/m3tal-ai`, M3tal-core owns
+the live allowlists, and model output is never auto-trusted (see
+`docs/ECOSYSTEM_INTEGRATION.md`).
+
 Requires Go 1.23 or newer. This project is licensed under the
 [MIT License](LICENSE).
 
@@ -54,6 +61,16 @@ validate|split`, `instructions --chat`), SFT via `train --sft`, decoding
 controls (`generate --chat --top-p --top-k --stop --stream`), a held-out
 conversational eval suite (`chat-eval`), and optional DPO (`train --dpo`).
 See `docs/STAGE3.md` for the full pipeline and run evidence.
+
+## Documentation
+
+Start at `docs/README.md` for the full index and suggested reading order
+(architecture → datasets → training → eval → serving → ecosystem).
+Highlights: `docs/DATA.md` (dataset/provenance pipeline), `docs/EVAL.md`
+(`eval-bench`), `docs/SERVE.md` (HTTP inference server + Go client),
+`docs/CUDA.md` (optional GPU backend), `docs/PACKAGING.md` (model cards
+and bundles), `docs/ECOSYSTEM_INTEGRATION.md` (relationship to m3tal-ai
+and M3tal-core, and the model-safety boundary).
 
 The assistant in `m3tal-plugins/m3tal-ai` keeps deterministic Core routing and
 accepts an optional language model through its `Generator` interface. Model

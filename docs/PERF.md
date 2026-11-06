@@ -65,10 +65,14 @@ the serial path.
 - **KV cache has no eviction** — long-context eval/generation falls back
   to full forwards past `context`. Sliding-window KV would unlock cheap
   long eval.
-- **CUDA heuristic** — `auto` picks CUDA whenever a device exists, but
-  small models are faster on CPU (transfer overhead). A size-based
-  heuristic (e.g., CUDA only above ~5M params or large GEMMs) would
-  avoid regressions; benchmarks in docs/SCALING.md.
+- **CUDA auto-selection heuristic** — implemented: `auto` now picks CUDA
+  for inference only when the estimated parameter count is at least
+  `cudaAutoMinParams` (~8M) in
+  `internal/lm/backend_select_cuda.go`, below which CPU wins on measured
+  hardware. An explicit `M3TAL_LLM_BACKEND=cuda` is still always honored.
+  Remaining gap: the threshold is a single constant tuned on the GTX 960;
+  larger/different GPUs may want a different cutoff, and training still
+  relies on the operator choosing the backend explicitly.
 - **Tokenifier/encode** is fine at current sizes.
 
 ## Reproduce

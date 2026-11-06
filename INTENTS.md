@@ -1,5 +1,11 @@
 # Assistant intents and safety classes
 
+> The M3TAL assistant described here lives in the M3TAL Plugins repository
+> at `m3tal-plugins/m3tal-ai` (module `m3tal-plugin-ai`) — it moved out of
+> this repo. This file is kept as the canonical intent/safety reference
+> for that codebase; this repo only provides the optional model it may
+> consume (see `docs/ECOSYSTEM_INTEGRATION.md`).
+
 The assistant uses deterministic routing for clear phrases and a small trained
 classifier for other requests. The classifier has a confidence threshold; an
 unclear request falls back to a clarification prompt.

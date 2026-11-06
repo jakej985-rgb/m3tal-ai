@@ -15,11 +15,18 @@ m3tal-lm eval-bench \
 
 ## What it measures
 
-- **Held-out loss / perplexity** — `Model.Evaluate` over the corpus,
-  capped by `--max-eval-tokens` (default 65,536). The cap exists because
-  evaluation runs one forward pass per token without a KV cache; larger
-  corpora need proportionally more time. Truncation is deterministic
-  (first N tokens of the corpus in file order).
+- **Held-out loss / perplexity** — corpus loss capped by
+  `--max-eval-tokens` (default 65,536). Two modes via `--eval-mode`
+  (recorded in reports as `eval_mode`): `fast` (default) uses
+  `Model.EvaluateFast`, which scores non-overlapping context-sized
+  blocks in one forward each (~35× faster than exact but slightly
+  different semantics — early-block tokens see only their in-block
+  prefix); `exact` uses `Model.Evaluate`, a full sliding-window forward
+  per token. The token cap exists because exact evaluation is one
+  forward pass per token without a KV cache; larger corpora need
+  proportionally more time. Truncation is deterministic (first N
+  tokens of the corpus in file order). Baseline comparisons must use
+  the same `--eval-mode` — see `docs/PERF.md`.
 - **Fixed generations** — a built-in prompt set (or `--prompts FILE`,
   one prompt per line, `#` comments) decoded with fixed
   `--tokens`/`--temperature`/`--seed`. Each prompt gets `seed+i` so the
@@ -52,8 +59,9 @@ regression detection meaningless.
 
 ## Known limitation
 
-`Model.Evaluate` does a full forward pass per token (no KV cache), so
-eval throughput is roughly training-forward speed. 16K tokens ≈ 1–3
-minutes for the stage0 model on CPU. A KV-cache evaluation path is a
-candidate future optimization; until then keep `--max-eval-tokens`
-modest and consistent across runs being compared.
+`--eval-mode exact` (`Model.Evaluate`) does a full forward pass per
+token (no KV cache), so eval throughput is roughly training-forward
+speed; `--eval-mode fast` (`Model.EvaluateFast`) is the default and is
+far cheaper but not bit-identical to exact loss. A KV-cache evaluation
+path is a candidate future optimization; until then keep
+`--max-eval-tokens` modest and consistent across runs being compared.
