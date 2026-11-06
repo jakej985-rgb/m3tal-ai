@@ -57,6 +57,10 @@ hoisted out of the row loop. Remaining serial work is small:
 `rmsNormBackward`, the SwiGLU activation backward, `gradLogits`, and
 embedding-gradient scatter (row ids can collide, so it stays serial).
 
+KV-step attention is also head-parallel via `parallelFor`, engaging only
+when `cachedTokens*headDim` is large enough — short generations stay on
+the serial path.
+
 ## Remaining bottlenecks (not yet done)
 - **KV cache has no eviction** — long-context eval/generation falls back
   to full forwards past `context`. Sliding-window KV would unlock cheap

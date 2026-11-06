@@ -627,40 +627,44 @@ func forwardStepKV(config Config, vocab int, weights inferenceWeights, tokenID i
 		kCached := cache.layers[bIdx].k
 		vCached := cache.layers[bIdx].v
 
-		// Multi-head attention against all cached tokens.
+		// Multi-head attention against all cached tokens. Heads write
+		// disjoint slices of attended, so they parallelize cleanly; for
+		// short caches parallelFor stays serial to avoid overhead.
 		attended := make([]float32, width)
-		for h := 0; h < heads; h++ {
-			headOffset := h * headDim
+		parallelFor(heads, cachedTokens*headDim*2, func(h0, h1 int) {
+			for h := h0; h < h1; h++ {
+				headOffset := h * headDim
 
-			maxScore := float32(math.Inf(-1))
-			scores := make([]float32, cachedTokens)
-			for j := 0; j < cachedTokens; j++ {
-				var score float32
-				for d := 0; d < headDim; d++ {
-					score += q[headOffset+d] * kCached[j*width+headOffset+d]
-				}
-				score *= scale
-				scores[j] = score
-				if score > maxScore {
-					maxScore = score
-				}
-			}
-
-			var normalizer float32
-			for j := 0; j < cachedTokens; j++ {
-				val := float32(math.Exp(float64(scores[j] - maxScore)))
-				scores[j] = val
-				normalizer += val
-			}
-
-			for d := 0; d < headDim; d++ {
-				var sum float32
+				maxScore := float32(math.Inf(-1))
+				scores := make([]float32, cachedTokens)
 				for j := 0; j < cachedTokens; j++ {
-					sum += (scores[j] / normalizer) * vCached[j*width+headOffset+d]
+					var score float32
+					for d := 0; d < headDim; d++ {
+						score += q[headOffset+d] * kCached[j*width+headOffset+d]
+					}
+					score *= scale
+					scores[j] = score
+					if score > maxScore {
+						maxScore = score
+					}
 				}
-				attended[headOffset+d] = sum
+
+				var normalizer float32
+				for j := 0; j < cachedTokens; j++ {
+					val := float32(math.Exp(float64(scores[j] - maxScore)))
+					scores[j] = val
+					normalizer += val
+				}
+
+				for d := 0; d < headDim; d++ {
+					var sum float32
+					for j := 0; j < cachedTokens; j++ {
+						sum += (scores[j] / normalizer) * vCached[j*width+headOffset+d]
+					}
+					attended[headOffset+d] = sum
+				}
 			}
-		}
+		})
 
 		attnProjection := linear32(attended, 1, width, width, block.attnOut)
 		residual := make([]float32, width)
