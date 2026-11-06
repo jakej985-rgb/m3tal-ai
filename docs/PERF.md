@@ -37,14 +37,21 @@ for sliding-window scoring.
 |------|--------|-------|
 | eval-bench 4K tokens (2.9M, ctx64) | 4m37s | 7.8s (~35×) |
 | generate 40 tok (2.9M SFT ckpt) | 7.7s | 4.2s (~1.8×, incl. load) |
+| train 250 steps, 2.9M ctx64 CPU | 59 tok/s | ~330 tok/s (~5.6×) |
 
 The `user` time exceeding `real` ~4× confirms cores are engaged.
 
-## Remaining bottlenecks (not yet done)
+## Parallel backward (added)
 
-- **Training backward** is still single-threaded — its weight-gradient
-  accumulation would need per-worker gradient buffers + reduction.
-  Forward is now parallel; backward likely dominates step time.
+`bwdLinear32` parallelizes every linear-layer backward: the input-gradient
+pass is partitioned by rows and the weight-gradient pass by input dim, so
+each gradient element keeps the serial accumulation order (bit-identical
+per element; cross-layer summation order changes only where multiple
+projections feed one tensor, e.g. Q+K+V). Verified by the finite
+difference gradcheck suite and a 250-step training run whose loss
+trajectory matches the serial baseline (epoch loss identical: 5.1387).
+
+## Remaining bottlenecks (not yet done)
 - **KV cache has no eviction** — long-context eval/generation falls back
   to full forwards past `context`. Sliding-window KV would unlock cheap
   long eval.

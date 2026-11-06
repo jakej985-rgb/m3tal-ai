@@ -7,7 +7,9 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync"
 )
 
 // Config defines the multi-layer, multi-head decoder-only Transformer.
@@ -212,6 +214,120 @@ func (m *Model) forward(ids []int) forwardCache {
 	return forwardFloat32(m.Config, len(m.Tokenizer.Tokens), m.parameterView(), ids)
 }
 
+// bwdLinear32 computes input, weight, and bias gradients for one linear
+// layer during backprop. x is [rows,inSize] activations, g is [rows,outSize]
+// output gradients (already loss-scaled), w is row-major [inSize,outSize]
+// forward weights. Weight/bias grads are accumulated (+=) into wGrad/bGrad;
+// the input gradient is returned as a fresh [rows,inSize] slice.
+//
+// Parallelization preserves the serial accumulation order per element:
+//   - dx rows are partitioned across workers (each (i,k) summed over j
+//     in ascending order, same as serial).
+//   - wGrad is partitioned by input dim k (each (k,j) summed over i in
+//     ascending order, same as serial).
+//   - bias grads stay serial (cheap, keeps order exact).
+func bwdLinear32(x, g []float32, rows, inSize, outSize int, w, wGrad, bGrad []float32) []float32 {
+	dx := make([]float32, rows*inSize)
+	work := rows * inSize * outSize
+	workers := runtime.GOMAXPROCS(0)
+	if workers > 8 {
+		workers = 8
+	}
+	if work < linearWorkThreshold || workers < 2 || inSize < workers || outSize < workers {
+		bwdLinear32Serial(x, g, rows, inSize, outSize, w, wGrad, bGrad, dx)
+		return dx
+	}
+
+	// Pass A: input gradient, partitioned by rows.
+	rowChunk := (rows + workers - 1) / workers
+	var wg sync.WaitGroup
+	for wk := 0; wk < workers; wk++ {
+		r0, r1 := wk*rowChunk, (wk+1)*rowChunk
+		if r1 > rows {
+			r1 = rows
+		}
+		if r0 >= r1 {
+			break
+		}
+		wg.Add(1)
+		go func(r0, r1 int) {
+			defer wg.Done()
+			for i := r0; i < r1; i++ {
+				gRow := g[i*outSize : (i+1)*outSize]
+				dxRow := dx[i*inSize : (i+1)*inSize]
+				for k := 0; k < inSize; k++ {
+					wRow := w[k*outSize : (k+1)*outSize]
+					var acc float32
+					for j := 0; j < outSize; j++ {
+						acc += wRow[j] * gRow[j]
+					}
+					dxRow[k] = acc
+				}
+			}
+		}(r0, r1)
+	}
+	wg.Wait()
+
+	// Pass B: weight gradient, partitioned by input dim k. Each worker
+	// owns whole rows of wGrad so writes are contiguous and race-free.
+	kChunk := (inSize + workers - 1) / workers
+	for wk := 0; wk < workers; wk++ {
+		k0, k1 := wk*kChunk, (wk+1)*kChunk
+		if k1 > inSize {
+			k1 = inSize
+		}
+		if k0 >= k1 {
+			break
+		}
+		wg.Add(1)
+		go func(k0, k1 int) {
+			defer wg.Done()
+			for k := k0; k < k1; k++ {
+				wgRow := wGrad[k*outSize : (k+1)*outSize]
+				for i := 0; i < rows; i++ {
+					xk := x[i*inSize+k]
+					gRow := g[i*outSize : (i+1)*outSize]
+					for j := 0; j < outSize; j++ {
+						wgRow[j] += xk * gRow[j]
+					}
+				}
+			}
+		}(k0, k1)
+	}
+	wg.Wait()
+
+	// Bias gradient: column sums of g (serial, cheap).
+	for i := 0; i < rows; i++ {
+		gRow := g[i*outSize : (i+1)*outSize]
+		for j := 0; j < outSize; j++ {
+			bGrad[j] += gRow[j]
+		}
+	}
+	return dx
+}
+
+// bwdLinear32Serial is the reference single-threaded implementation.
+func bwdLinear32Serial(x, g []float32, rows, inSize, outSize int, w, wGrad, bGrad, dx []float32) {
+	for i := 0; i < rows; i++ {
+		xRow := x[i*inSize : (i+1)*inSize]
+		gRow := g[i*outSize : (i+1)*outSize]
+		for k := 0; k < inSize; k++ {
+			xk := xRow[k]
+			wRow := w[k*outSize : (k+1)*outSize]
+			wgRow := wGrad[k*outSize : (k+1)*outSize]
+			var acc float32
+			for j := 0; j < outSize; j++ {
+				wgRow[j] += xk * gRow[j]
+				acc += wRow[j] * gRow[j]
+			}
+			dx[i*inSize+k] = acc
+		}
+		for j := 0; j < outSize; j++ {
+			bGrad[j] += gRow[j]
+		}
+	}
+}
+
 // backward propagates the cross-entropy loss gradient through the full model.
 // If mask is non-nil, only positions where mask[i]==true contribute to the loss.
 func (m *Model) backward(cache forwardCache, targets []int, mask []bool) {
@@ -249,21 +365,11 @@ func (m *Model) backward(cache forwardCache, targets []int, mask []bool) {
 
 	// ── 2. Output linear layer ─────────────────────────────────────────────
 	lastBlockIdx := len(m.blocks) - 1
-	gradCurrentX := make([]float32, rows*width)
-	for i := 0; i < rows; i++ {
-		for d := 0; d < width; d++ {
-			for tok := 0; tok < vocab; tok++ {
-				idx := d*vocab + tok
-				m.output.weights.gradient[idx] += cache.blocks[lastBlockIdx].encoded[i*width+d] * gradLogits[i*vocab+tok]
-				gradCurrentX[i*width+d] += m.output.weights.values[idx] * gradLogits[i*vocab+tok]
-			}
-		}
-	}
-	for i := 0; i < rows; i++ {
-		for j := 0; j < vocab; j++ {
-			m.output.bias.gradient[j] += gradLogits[i*vocab+j]
-		}
-	}
+	gradCurrentX := bwdLinear32(
+		cache.blocks[lastBlockIdx].encoded, gradLogits,
+		rows, width, vocab,
+		m.output.weights.values, m.output.weights.gradient, m.output.bias.gradient,
+	)
 
 	// ── 3. Transformer blocks (reverse order) ─────────────────────────────
 	for l := len(m.blocks) - 1; l >= 0; l-- {
@@ -281,21 +387,11 @@ func (m *Model) backward(cache forwardCache, targets []int, mask []bool) {
 		// Forward: feedForward = activated · W_down + bias_down
 		// Backward: dActivated[h] = Σ_d W_down[h*width+d] * dEncoded[d]
 		hiddenDim := width * 2
-		gradActivated := make([]float32, rows*hiddenDim)
-		for i := 0; i < rows; i++ {
-			for h := 0; h < hiddenDim; h++ {
-				for d := 0; d < width; d++ {
-					idx := h*width + d
-					block.ffDown.weights.gradient[idx] += bc.ffActivated[i*hiddenDim+h] * gradEncoded[i*width+d]
-					gradActivated[i*hiddenDim+h] += block.ffDown.weights.values[idx] * gradEncoded[i*width+d]
-				}
-			}
-		}
-		for i := 0; i < rows; i++ {
-			for d := 0; d < width; d++ {
-				block.ffDown.bias.gradient[d] += gradEncoded[i*width+d]
-			}
-		}
+		gradActivated := bwdLinear32(
+			bc.ffActivated, gradEncoded,
+			rows, hiddenDim, width,
+			block.ffDown.weights.values, block.ffDown.weights.gradient, block.ffDown.bias.gradient,
+		)
 
 		// ── 3c. SwiGLU activation backward: activated = swish(gate) ⊙ up ──
 		// dUp[h]   = dActivated[h] * swish(gate[h])
@@ -309,19 +405,13 @@ func (m *Model) backward(cache forwardCache, targets []int, mask []bool) {
 
 		// ── 3d. ffGate and ffUp linear backward (input was normX2) ────
 		// dNormX2[d] += Σ_h W_gate[d*hiddenDim+h]*dGate[h] + W_up[d*hiddenDim+h]*dUp[h]
+		dxGate := bwdLinear32(bc.normX2, gradGate, rows, width, hiddenDim,
+			block.ffGate.weights.values, block.ffGate.weights.gradient, block.ffGate.bias.gradient)
+		dxUp := bwdLinear32(bc.normX2, gradUp, rows, width, hiddenDim,
+			block.ffUp.weights.values, block.ffUp.weights.gradient, block.ffUp.bias.gradient)
 		gradNormX2 := make([]float32, rows*width)
-		for i := 0; i < rows; i++ {
-			for h := 0; h < hiddenDim; h++ {
-				block.ffGate.bias.gradient[h] += gradGate[i*hiddenDim+h]
-				block.ffUp.bias.gradient[h] += gradUp[i*hiddenDim+h]
-				for d := 0; d < width; d++ {
-					idx := d*hiddenDim + h
-					block.ffGate.weights.gradient[idx] += bc.normX2[i*width+d] * gradGate[i*hiddenDim+h]
-					gradNormX2[i*width+d] += block.ffGate.weights.values[idx] * gradGate[i*hiddenDim+h]
-					block.ffUp.weights.gradient[idx] += bc.normX2[i*width+d] * gradUp[i*hiddenDim+h]
-					gradNormX2[i*width+d] += block.ffUp.weights.values[idx] * gradUp[i*hiddenDim+h]
-				}
-			}
+		for i := range gradNormX2 {
+			gradNormX2[i] = dxGate[i] + dxUp[i]
 		}
 
 		// ── 3e. RMSNorm #2 backward (pre-FFN norm) ────────────────────
@@ -336,21 +426,8 @@ func (m *Model) backward(cache forwardCache, targets []int, mask []bool) {
 		copy(gradX, gradResidual) // direct flow through residual connection
 
 		// ── 3g. attnOut linear ────────────────────────────────────────
-		gradAttended := make([]float32, rows*width)
-		for i := 0; i < rows; i++ {
-			for inp := 0; inp < width; inp++ {
-				for out := 0; out < width; out++ {
-					idx := inp*width + out
-					block.attnOut.weights.gradient[idx] += bc.attended[i*width+inp] * gradResidual[i*width+out]
-					gradAttended[i*width+inp] += block.attnOut.weights.values[idx] * gradResidual[i*width+out]
-				}
-			}
-		}
-		for i := 0; i < rows; i++ {
-			for out := 0; out < width; out++ {
-				block.attnOut.bias.gradient[out] += gradResidual[i*width+out]
-			}
-		}
+		gradAttended := bwdLinear32(bc.attended, gradResidual, rows, width, width,
+			block.attnOut.weights.values, block.attnOut.weights.gradient, block.attnOut.bias.gradient)
 
 		// ── 3h. Multi-head causal attention backward ──────────────────
 		// Gradients w.r.t. Q/K after RoPE, and V (no RoPE on V).
@@ -395,26 +472,15 @@ func (m *Model) backward(cache forwardCache, targets []int, mask []bool) {
 		applyInverseRoPE(gradQueryRope, gradKeysRope, rows, width, headDim, heads)
 
 		// ── 3j. QKV linear projections backward (input was normX1) ────
+		dxQ := bwdLinear32(bc.normX1, gradQueryRope, rows, width, width,
+			block.query.weights.values, block.query.weights.gradient, block.query.bias.gradient)
+		dxK := bwdLinear32(bc.normX1, gradKeysRope, rows, width, width,
+			block.key.weights.values, block.key.weights.gradient, block.key.bias.gradient)
+		dxV := bwdLinear32(bc.normX1, gradValues, rows, width, width,
+			block.value.weights.values, block.value.weights.gradient, block.value.bias.gradient)
 		gradNormX1 := make([]float32, rows*width)
-		for inp := 0; inp < width; inp++ {
-			for out := 0; out < width; out++ {
-				idx := inp*width + out
-				for i := 0; i < rows; i++ {
-					block.query.weights.gradient[idx] += bc.normX1[i*width+inp] * gradQueryRope[i*width+out]
-					gradNormX1[i*width+inp] += block.query.weights.values[idx] * gradQueryRope[i*width+out]
-					block.key.weights.gradient[idx] += bc.normX1[i*width+inp] * gradKeysRope[i*width+out]
-					gradNormX1[i*width+inp] += block.key.weights.values[idx] * gradKeysRope[i*width+out]
-					block.value.weights.gradient[idx] += bc.normX1[i*width+inp] * gradValues[i*width+out]
-					gradNormX1[i*width+inp] += block.value.weights.values[idx] * gradValues[i*width+out]
-				}
-			}
-		}
-		for i := 0; i < rows; i++ {
-			for out := 0; out < width; out++ {
-				block.query.bias.gradient[out] += gradQueryRope[i*width+out]
-				block.key.bias.gradient[out] += gradKeysRope[i*width+out]
-				block.value.bias.gradient[out] += gradValues[i*width+out]
-			}
+		for i := range gradNormX1 {
+			gradNormX1[i] = dxQ[i] + dxK[i] + dxV[i]
 		}
 
 		// ── 3k. RMSNorm #1 backward (pre-attention norm) ──────────────
