@@ -65,14 +65,23 @@ the serial path.
 - **KV cache has no eviction** — long-context eval/generation falls back
   to full forwards past `context`. Sliding-window KV would unlock cheap
   long eval.
-- **CUDA auto-selection heuristic** — implemented: `auto` now picks CUDA
-  for inference only when the estimated parameter count is at least
-  `cudaAutoMinParams` (~8M) in
-  `internal/lm/backend_select_cuda.go`, below which CPU wins on measured
-  hardware. An explicit `M3TAL_LLM_BACKEND=cuda` is still always honored.
-  Remaining gap: the threshold is a single constant tuned on the GTX 960;
-  larger/different GPUs may want a different cutoff, and training still
-  relies on the operator choosing the backend explicitly.
+- **CUDA auto-selection** — measured KV-cache generation (60 tokens,
+  warm, GTX 960) shows CUDA faster than CPU at every tested size, so
+  `auto` always prefers CUDA when a device is present; no size heuristic
+  is applied (`internal/lm/backend_select_cuda.go`):
+
+  | Params | CPU tok/s | CUDA tok/s |
+  |--------|-----------|------------|
+  | 0.15M  | 415       | 1316       |
+  | 2.9M   | 100       | 498        |
+  | 8.4M   | 41        | 277        |
+  | 21.5M  | 15.9      | 138        |
+  | 48M    | 7.9       | 81.8       |
+
+  Note this contradicts the earlier assumption that small models are
+  faster on CPU — that observation was about *training* throughput,
+  where the backward pass is CPU-side regardless of the inference
+  backend. Explicit `M3TAL_LLM_BACKEND=cpu` still forces CPU.
 - **Tokenifier/encode** is fine at current sizes.
 
 ## Reproduce
