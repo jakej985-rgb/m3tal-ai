@@ -62,6 +62,7 @@ var cpuCapabilities = Capabilities{
 
 var (
 	selectedBackend atomic.Value // stores string
+	autoSelected    atomic.Bool  // true when "auto" resolved the choice
 	backendProbe    = probeBackends
 )
 
@@ -102,6 +103,7 @@ func Select(name string) error {
 		name = "cpu"
 	}
 	if name == "auto" {
+		autoSelected.Store(true)
 		if cuda := findBackend("cuda"); cuda.CompiledIn && cuda.Available {
 			selectedBackend.Store("cuda")
 			return nil
@@ -128,6 +130,7 @@ func Select(name string) error {
 	if !info.Available {
 		return fmt.Errorf("backend %q is unavailable: %s", base, info.Reason)
 	}
+	autoSelected.Store(false)
 	selectedBackend.Store(base)
 	return nil
 }
@@ -142,6 +145,10 @@ func SelectFromEnv() error {
 	}
 	return nil
 }
+
+// AutoSelected reports whether the current backend was chosen by "auto"
+// resolution rather than an explicit Select("cuda"/"cpu") request.
+func AutoSelected() bool { return autoSelected.Load() }
 
 // Selected returns the name of the currently preferred backend.
 func Selected() string {

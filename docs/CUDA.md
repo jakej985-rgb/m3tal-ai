@@ -46,7 +46,11 @@ Backend selection lives in `internal/tensor/kernel` and is process-wide:
 
 - Default: `cpu`.
 - Environment variable: `M3TAL_LLM_BACKEND=cpu|cuda|auto` (`auto` picks CUDA
-  when a device is present, otherwise CPU).
+  when a device is present, otherwise CPU). For inference, `auto` only
+  chooses CUDA when the estimated parameter count is at least ~8M
+  (`cudaAutoMinParams` in `internal/lm/backend_select_cuda.go`) — below
+  that, measured per-op transfer/launch overhead makes CPU faster. An
+  explicit `cuda` selection is always honored.
 - Programmatic: `kernel.Select("cuda")`, `kernel.Probe()`,
   `kernel.Report()`.
 
