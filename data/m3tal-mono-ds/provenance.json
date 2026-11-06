@@ -1,0 +1,96 @@
+{
+  "format": "m3tal.provenance",
+  "version": 1,
+  "pipeline": "m3tal-lm dataset build",
+  "pipeline_hash": "2e57d30",
+  "created_unix": 1793958430,
+  "manifest_id": "prov-1793958430388577306",
+  "sources": [
+    {
+      "name": "m3tal-core-docs",
+      "kind": "text",
+      "paths": [
+        "/home/m3tal/apps/M3tal-core"
+      ],
+      "license": "self-owned",
+      "license_review": "First-party M3tal Core repository maintained by the project owner. Reviewed 2026-11-06: all content is authored in-house; no third-party licensed material is included. Only .md/.txt corpus-eligible files are ingested; node_modules, vendor, build, and dist directories are skipped by the corpus walker.",
+      "url": "local:/home/m3tal/apps/M3tal-core",
+      "retrieved_unix": 1794000000,
+      "version": "working-tree 2026-11-06",
+      "filters": [
+        "markdown-and-text-only",
+        "sensitive-file-skip",
+        "node_modules-skip"
+      ],
+      "dedup": "exact",
+      "sha256": "133d33fbba2d7ea5d379c15e3f94e5022e63a2a24ab74043140d9b6f837e1679",
+      "bytes": 168992
+    },
+    {
+      "name": "m3tal-plugins-docs",
+      "kind": "text",
+      "paths": [
+        "/home/m3tal/apps/m3tal-plugins"
+      ],
+      "license": "self-owned",
+      "license_review": "First-party M3tal plugins repository maintained by the project owner. Reviewed 2026-11-06: all content is authored in-house; only .md/.txt corpus-eligible files are ingested.",
+      "url": "local:/home/m3tal/apps/m3tal-plugins",
+      "retrieved_unix": 1794000000,
+      "version": "working-tree 2026-11-06",
+      "filters": [
+        "markdown-and-text-only",
+        "sensitive-file-skip"
+      ],
+      "dedup": "exact",
+      "sha256": "878836f744ee7ed96404feab23c596089b007af48fa2ddb5ddaf7c63cb82f33f",
+      "bytes": 81918
+    },
+    {
+      "name": "m3tal-review-docs",
+      "kind": "text",
+      "paths": [
+        "/home/m3tal/apps/m3tal-review"
+      ],
+      "license": "self-owned",
+      "license_review": "First-party M3tal review repository maintained by the project owner. Reviewed 2026-11-06: all content is authored in-house; only .md/.txt corpus-eligible files are ingested.",
+      "url": "local:/home/m3tal/apps/m3tal-review",
+      "retrieved_unix": 1794000000,
+      "version": "working-tree 2026-11-06",
+      "filters": [
+        "markdown-and-text-only",
+        "sensitive-file-skip"
+      ],
+      "dedup": "exact",
+      "sha256": "31b2662a25fb4be362dec498051a6be5f3f9a80befb4dfe68fbf2f31e8f7a1db",
+      "bytes": 120470
+    },
+    {
+      "name": "m3tal-llm-docs",
+      "kind": "text",
+      "paths": [
+        "/home/m3tal/apps/m3tal-llm/docs",
+        "/home/m3tal/apps/m3tal-llm/README.md"
+      ],
+      "license": "self-owned",
+      "license_review": "This repository's own documentation, authored during the project. Reviewed 2026-11-06: self-owned; data/ is excluded by listing docs/ and README.md explicitly so training corpora are not fed back into the corpus.",
+      "url": "local:/home/m3tal/apps/m3tal-llm",
+      "retrieved_unix": 1794000000,
+      "version": "working-tree 2026-11-06",
+      "filters": [
+        "markdown-and-text-only",
+        "docs-and-readme-only"
+      ],
+      "dedup": "exact",
+      "sha256": "0fab031e769b22cb5d5b57e2c3bc607c490bafd82a0b7afdb65cb911599f27a2",
+      "bytes": 44727
+    }
+  ],
+  "ingest_stats": {
+    "documents_in": 73,
+    "documents_kept": 73,
+    "documents_duplicate": 0,
+    "tokens_train": 287498,
+    "tokens_val": 6026
+  },
+  "train_val_split": "document-hash val_frac=0.0500 -\u003e data/m3tal-mono-ds-val"
+}

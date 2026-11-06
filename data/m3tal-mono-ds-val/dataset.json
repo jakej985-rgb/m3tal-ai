@@ -1,0 +1,12 @@
+{
+  "format": "m3tal.tokendataset",
+  "version": 1,
+  "dtype": "u32",
+  "tokenizer": "fnv64a:ca3e571d2cf17f91",
+  "shard_tokens": 500000,
+  "shard_count": 1,
+  "total_tokens": 6026,
+  "created_unix": 1793958429,
+  "dataset_id": "ds-1793958429452225834",
+  "finalized": true
+}
